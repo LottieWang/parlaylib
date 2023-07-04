@@ -38,3 +38,7 @@ CMakeSettings.json
 *.exe
 *.out
 *.app
+
+#VSCode
+.vscode/*
+
