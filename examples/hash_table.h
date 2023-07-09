@@ -82,9 +82,7 @@ struct hash_table {
         cts[wn * kResizableTableCacheLineSz]++;
         return true;
       }
-      if (equal(H[i], kv)) {
-	    return false;
-	  }
+      if (equal(H[i], kv)) return false;
 	  i = next_index(i);
 	}
     std::cout << "Hash table overfull" << std::endl;
@@ -124,11 +122,13 @@ struct iter_k{
     T& table; 
     iter_k(K _k, T& _table):
         k(_k), table(_table) {}
-
+    bool equal(KV a, KV b){return 
+      parlay::internal::get_key(a)==parlay::internal::get_key(b) &&
+      parlay::internal::get_val(a)==parlay::internal::get_val(b);}
     bool init(){
         i = table.first_index(k);
         while (true){
-            if (table.H[i]==table.empty){
+            if (equal(table.H[i],table.empty)){
                 return false;
             }
             if (parlay::internal::get_key(table.H[i]) == k){
@@ -140,15 +140,16 @@ struct iter_k{
     }
 
     bool has_next(){
+      // printf("        key: %d, i: %d, num_prob: %d\n", k, i, num_prob);
         while (num_prob<table.m){
-            if (table.H[i]==table.empty){
+            i = table.next_index(i);
+            num_prob++;
+            if (equal(table.H[i],table.empty)){
                 return false;
             }
             if (parlay::internal::get_key(table.H[i]) ==k){
                 return true;
             }
-            i = table.next_index(i);
-            num_prob++;
         }
         return false;
     }

@@ -34,7 +34,7 @@ int main(int argc, char* argv[]) {
     utils::print_graph_stats(G);
     // nested_seq SCCs;
     parlay::internal::timer t("Time");
-    for (int i=0; i < 5; i++) {
+    for (int i=0; i < 1; i++) {
       find_scc<vertex, graph>(G, GT);
       t.next("SCC ");
     }
