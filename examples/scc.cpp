@@ -4,7 +4,7 @@
 #include <parlay/primitives.h>
 #include <parlay/sequence.h>
 
-using vertex = int;
+using vertex = unsigned int;
 #include "scc.h"
 #include "helper/graph_utils.h"
 
@@ -25,7 +25,6 @@ int main(int argc, char* argv[]) {
     catch (...) {}
     if (n == 0) {
       G = utils::read_graph_from_file(argv[1]);
-      utils::print_graph_stats(G);
       GT = utils::transpose(G);
       n = G.size();
     } else {
@@ -33,13 +32,12 @@ int main(int argc, char* argv[]) {
       GT = utils::transpose(G);
     }
     utils::print_graph_stats(G);
-    parlay::sequence<vertex> label;
+    // nested_seq SCCs;
     parlay::internal::timer t("Time");
     for (int i=0; i < 5; i++) {
-      label = find_scc(G, GT);
+      find_scc<vertex, graph>(G, GT);
       t.next("SCC ");
     }
 
-    std::cout << "num vertices visited: " << filter(label, [&](size_t i){return label[i]!=max_label;}).size() << std::endl;
   }
 }
