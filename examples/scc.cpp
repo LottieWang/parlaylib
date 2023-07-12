@@ -24,8 +24,8 @@ int main(int argc, char* argv[]) {
     try { n = std::stol(argv[1]); }
     catch (...) {}
     if (n == 0) {
-      // G = utils::read_graph_from_file(argv[1]);
-      G = utils::read_graph_from_bin(argv[1]);
+      G = utils::read_graph_from_file(argv[1]);
+      // G = utils::read_graph_from_bin(argv[1]);
       GT = utils::transpose(G);
       n = G.size();
     } else {
@@ -35,7 +35,7 @@ int main(int argc, char* argv[]) {
     utils::print_graph_stats(G);
     // nested_seq SCCs;
     parlay::internal::timer t("Time");
-    for (int i=0; i < 5; i++) {
+    for (int i=0; i < 2; i++) {
       find_scc<vertex, graph>(G, GT);
       t.next("SCC ");
     }

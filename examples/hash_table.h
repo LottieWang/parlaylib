@@ -107,6 +107,11 @@ struct hash_table {
         f(H[i]);
       }
     });
+    // for (size_t i = 0; i<m; i++){
+    //   if (!equal(H[i], empty)){
+    //     f(H[i]);
+    //   }
+    // }
   }
 
 };
