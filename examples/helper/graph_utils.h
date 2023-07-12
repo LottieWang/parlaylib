@@ -212,6 +212,33 @@ struct graph_utils {
       return scan_inclusive(edges.cut(o[i], o[i]+lengths[i]));});
   }
 
+  static graph read_graph_from_bin(const std::string& filename){
+    std::ifstream ifs(filename);
+    if (!ifs.is_open()) {
+      std::cerr << "Error: Cannot open file " << filename << '\n';
+      abort();
+    }
+    size_t n, m, sizes;
+    ifs.read(reinterpret_cast<char*>(&n), sizeof(size_t));
+    ifs.read(reinterpret_cast<char*>(&m), sizeof(size_t));
+    ifs.read(reinterpret_cast<char*>(&sizes), sizeof(size_t));
+    assert(sizes == (n + 1) * 8 + m * 4 + 3 * 8);
+
+    parlay::sequence<uint64_t> offset(n + 1);
+    parlay::sequence<uint32_t> edge(m);
+    ifs.read(reinterpret_cast<char*>(offset.begin()), (n + 1) * 8);
+    ifs.read(reinterpret_cast<char*>(edge.begin()), m * 4);
+    if (ifs.peek() != EOF) {
+      std::cerr << "Error: Bad data\n";
+      abort();
+    }
+    ifs.close();
+    auto edges = parlay::tabulate(m, [&](long i){return (vertex) edge[i];});
+    auto offsets = parlay::tabulate(n, [&](long i){return (vertex) offset[i];});
+    return parlay::tabulate(n, [&, o=offsets.begin()] (vertex i){
+      return to_sequence(edges.cut(o[i], o[i+1]));});
+  }
+
   // assumes each edge is kept in just one direction, so copied into other
   static graph read_symmetric_graph_from_file(const std::string& filename) {
     auto G = read_graph_from_file(filename);
