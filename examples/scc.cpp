@@ -24,7 +24,8 @@ int main(int argc, char* argv[]) {
     try { n = std::stol(argv[1]); }
     catch (...) {}
     if (n == 0) {
-      G = utils::read_graph_from_file(argv[1]);
+      // G = utils::read_graph_from_file(argv[1]);
+      G = utils::read_graph_from_bin(argv[1]);
       GT = utils::transpose(G);
       n = G.size();
     } else {

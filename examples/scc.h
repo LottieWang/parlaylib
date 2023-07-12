@@ -10,14 +10,12 @@
 
 
 
-template <typename vertex, typename label_type, typename graph>
-auto single_reach(vertex start, const graph& G, const graph& GT,            parlay::sequence<label_type>& label) {
+template <typename vertex,  typename graph>
+auto single_reach(vertex start, const graph& G, const graph& GT) {
   auto visited = parlay::tabulate<std::atomic<bool>>(G.size(), [&] (long i) {
     return (i==start) ? true : false; });
 
   auto edge_f = [&] (vertex u, vertex v) -> bool {
-    if (label[v]!=label[u])
-      return false;
     bool expected = false;
     return visited[v].compare_exchange_strong(expected, true);};
   auto cond_f = [&] (vertex v) { return !visited[v];};
@@ -98,16 +96,21 @@ auto find_scc(graph& G, graph& GT){
     parlay::parallel_for(0, trim.size(), [&](size_t i){label[trim[i]]=(scc_offset+i) | TOP_BIT;});
     scc_offset+=trim.size();
     std::cout << "singleton SCCs: " << trim.size() << std::endl;
-    std::cout << "  n_remain: " << parlay::internal::count_if_index(G.size(), [&](size_t i){return !(label[i]&TOP_BIT);}) << std::endl;
+    auto non_zeros = parlay::filter(order, [&](vertex i){return G[i].size()!=0 && GT[i].size() !=0;});
+    // std::cout << "  n_remain: " << parlay::internal::count_if_index(G.size(), [&](size_t i){return !(label[i]&TOP_BIT);}) << std::endl;
+    std::cout << "   n_remain: " << non_zeros.size() << std::endl;
     
     // First round: single_reach
-    size_t source_id = ::find_if(order, [&] (vertex i) { return (label[i] & TOP_BIT)==0;});
-    vertex source = order[source_id];
-    auto forw_reach = single_reach(source, G, GT, label);
-    auto back_reach = single_reach(source, GT, G, label);
-    parlay::parallel_for(0, G.size(), [&](size_t i){
-        if (forw_reach[i] || back_reach[i]){
-          label[i] = (forw_reach[i] && back_reach[i])? (scc_offset|TOP_BIT) : scc_offset;
+    // size_t source_id = ::find_if(order, [&] (vertex i) { return (label[i] & TOP_BIT)==0;});
+    vertex source = non_zeros[0];
+    auto forw_reach = single_reach(source, G, GT);
+    auto back_reach = single_reach(source, GT, G);
+    parlay::parallel_for(0, non_zeros.size(), [&](size_t i){
+        vertex u = non_zeros[i];
+        if (forw_reach[u] && back_reach[u]){
+          label[u] = scc_offset|TOP_BIT;
+        }else if (forw_reach[u] || back_reach[u]){
+          label[u] = scc_offset;
         }
     });
     std::cout << "first scc size: " <<parlay::internal::count_if_index(G.size(), [&](size_t i){return forw_reach[i] && back_reach[i];}) << std::endl;
@@ -138,12 +141,14 @@ auto find_scc(graph& G, graph& GT){
       while (fwd_table.overfull==true){
         m=2*m;
         fwd_table = multi_search_edge_map(sources, G, label, m, scc_offset);
+        std::cout << "resize forward table" << std::endl;
       }      
       std::cout << "  forward table size " << fwd_table.size() << std::endl;
       auto bwd_table = multi_search_edge_map(sources, GT, label, m, scc_offset);
       while (bwd_table.overfull==true){
         m=2*m;
         bwd_table = multi_search_edge_map(sources, GT, label, m, scc_offset);
+        std::cout << "resize backward table" << std::endl;
       }
       std::cout << "  backward table size " << bwd_table.size() << std::endl;
       auto small_table = (fwd_table.size()<= bwd_table.size())? fwd_table: bwd_table;
