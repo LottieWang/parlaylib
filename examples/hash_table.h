@@ -51,7 +51,7 @@ struct hash_table {
   size_t size(){
     for (int i = 0;i<parlay::num_workers(); i++){
         ne+= cts[i*kResizableTableCacheLineSz];
-        cts[i*parlay::num_workers()]=0;
+        cts[i*kResizableTableCacheLineSz]=0;
     }
     if (ne >= m){overfull=true;}
     return ne;
