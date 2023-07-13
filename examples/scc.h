@@ -47,7 +47,8 @@ auto edge_map_sparse(parlay::sequence<vertex> const &vertices,
   }
 // using edge_map for load balance
 template <typename vertex, typename label_type, typename graph>
-auto multi_search_edge_map(parlay::sequence<vertex> sources, const graph& G,  parlay::sequence<label_type>& label, size_t m, vertex scc_offset){
+auto multi_search_edge_map(parlay::sequence<vertex> sources, const graph& G,  parlay::sequence<std::atomic<label_type>>& label, size_t m, vertex scc_offset){
+  constexpr label_type TOP_BIT = static_cast<label_type>(1) << (8*sizeof(label_type)-1);
   auto bits = parlay::tabulate<std::atomic<bool>>(G.size(), [](size_t i){return false;});
   using Table = hash_table<vertex, vertex>;
   Table T(m, std::make_pair(G.size(),G.size()));
@@ -73,7 +74,7 @@ auto multi_search_edge_map(parlay::sequence<vertex> sources, const graph& G,  pa
       return false;
     }
   };
-  auto cond_f = [&] (vertex v) { return !bits[v];};
+  auto cond_f = [&] (vertex v) { return !(label[v] & TOP_BIT) && !bits[v];};
 
   parlay::sequence<vertex> frontier = sources;
   int round = 0;
@@ -165,31 +166,31 @@ auto find_scc(graph& G, graph& GT){
       auto small_table = (fwd_table.size()<= bwd_table.size())? fwd_table: bwd_table;
       auto large_table = (fwd_table.size()>bwd_table.size())? fwd_table: bwd_table;
 
-      size_t found_cnt = 0;
+      // size_t found_cnt = 0;
       auto map_f1 = [&](std::pair<vertex, vertex> a){
         vertex u = parlay::internal::get_key(a);
         vertex l = parlay::internal::get_val(a);
         if (large_table.contain(a)){
           parlay::write_max(&label[u], (TOP_BIT | (label_type)l), std::less<label_type>());
-          found_cnt += 1;
+          // found_cnt += 1;
         }else{
           parlay::write_max(&label[u], (label_type)l, std::less<label_type>());
         }
       };
       small_table.map(map_f1);
       // printf("\n");
-      printf("found %ld \n", found_cnt);
+      // printf("found %ld \n", found_cnt);
       auto map_f2 = [&](std::pair<vertex, vertex> a){
         vertex u = parlay::internal::get_key(a);
         vertex l = parlay::internal::get_val(a);
         parlay::write_max(&label[u], (label_type)l, std::less<label_type>());
       };
-      n_remain = parlay::internal::count_if_index(n-start, [&](size_t i){return !(TOP_BIT & label[vertices[start+i]]);});
-      std::cout << "  n_remain: " << n_remain << std::endl;
+      // n_remain = parlay::internal::count_if_index(n-start, [&](size_t i){return !(TOP_BIT & label[vertices[start+i]]);});
+      // std::cout << "  n_remain: " << n_remain << std::endl;
       large_table.map(map_f2);
       scc_offset+=(end-start);
       start =end;
-      step = step * beta;
+      step = ceil(step * beta);
     }
 
     auto pairs = parlay::delayed::tabulate(G.size(), [&] (vertex i) {

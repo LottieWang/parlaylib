@@ -223,7 +223,6 @@ struct graph_utils {
     ifs.read(reinterpret_cast<char*>(&m), sizeof(size_t));
     ifs.read(reinterpret_cast<char*>(&sizes), sizeof(size_t));
     assert(sizes == (n + 1) * 8 + m * 4 + 3 * 8);
-
     parlay::sequence<uint64_t> offset(n + 1);
     parlay::sequence<uint32_t> edge(m);
     ifs.read(reinterpret_cast<char*>(offset.begin()), (n + 1) * 8);
@@ -235,8 +234,8 @@ struct graph_utils {
     ifs.close();
     auto edges = parlay::tabulate(m, [&](long i){return (vertex) edge[i];});
     auto offsets = parlay::tabulate(n, [&](long i){return (vertex) offset[i];});
-    return parlay::tabulate(n, [&, o=offsets.begin()] (vertex i){
-      return to_sequence(edges.cut(o[i], o[i+1]));});
+    return parlay::tabulate(n, [&] (long i){
+      return to_sequence(edges.cut(offsets[i], offsets[i+1]));});
   }
 
   // assumes each edge is kept in just one direction, so copied into other
