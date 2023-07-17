@@ -25,12 +25,22 @@ struct graph_utils {
   using row = parlay::sequence<element>;
   using sparse_matrix = parlay::sequence<row>;
 
-  // transpose a directed graph
-  // i.e. generate the backward edges for every forward edges
   static graph transpose(const graph& G) {
     auto pairs = flatten(parlay::delayed::tabulate(G.size(), [&] (vertex i) {
-      return map(G[i], [=] (auto ngh) {
-        return std::pair(ngh, i);}, 1000);}));
+      return map(G[i], [&,oi = i] (auto ngh) {
+        return std::pair(ngh, oi);}, 1000);}));
+    // auto pairs = flatten(parlay::delayed::tabulate(G.size(), [&] (vertex i){
+    //   return 
+    // }));
+
+    // auto offsets = scan(map(G, parlay::size_of()));
+    // parlay::sequence<std::pair<vertex, vertex> > pairs(std::get<1>(offsets));
+    // parlay::parallel_for(0, G.size(), [&](size_t i){
+    //   size_t start = std::get<0>(offsets)[i];
+    //   parlay::parallel_for(0, G[i].size(), [&](size_t j){
+    //     pairs[start+j]=std::make_pair(G[i][j], i); 
+    //   });
+    // });
     return group_by_index(pairs, G.size());
   }
 
@@ -232,10 +242,8 @@ struct graph_utils {
       abort();
     }
     ifs.close();
-    auto edges = parlay::tabulate(m, [&](long i){return (vertex) edge[i];});
-    auto offsets = parlay::tabulate(n, [&](long i){return (vertex) offset[i];});
     return parlay::tabulate(n, [&] (long i){
-      return to_sequence(edges.cut(offsets[i], offsets[i+1]));});
+      return to_sequence(edge.cut(offset[i], offset[i+1]));});
   }
 
   // assumes each edge is kept in just one direction, so copied into other
