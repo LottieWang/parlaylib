@@ -21,21 +21,23 @@
 //  Ligra: a lightweight graph processing framework for shared memory.
 //  PPOPP 2013:
 // **************************************************************
-#define K_CAP 32
-
 using namespace parlay;
 
-template <typename vertex, typename distance>
+template <typename vertex, typename distance, typename bits>
 class PrunedLandmarkLabeling{
   public:
     // constexpr distance INF_D = std::numeric_limits<distance>::max();
     distance INF_D = std::numeric_limits<distance>::max();
     sequence<sequence<vertex>> index_v;
     sequence<sequence<distance>> index_d;
+    sequence<sequence<bits>> bitwise_indexv;
+    sequence<sequence<sequence<distance>>> bitwise_indexd;
 
     PrunedLandmarkLabeling(vertex n){
       index_v = sequence<sequence<vertex>>(n);
       index_d = sequence<sequence<distance>>(n);
+      bitwise_indexv = sequence<sequence<bits>>(4);
+      bitwise_indexd = sequence<sequence<sequence<distance>>>(4);
     }
     void insert(vertex i, vertex j, distance dist){
       index_v[i].push_back(j);
@@ -50,7 +52,7 @@ template <typename vertex, typename distance, typename graph>
 auto Single_PrunedBFS(graph& G, vertex r,
 		  sequence<vertex>& orders,
       sequence<vertex>& inv_orders,
-		  PrunedLandmarkLabeling<vertex, distance>& L){
+		  PrunedLandmarkLabeling<vertex, distance, uint64_t>& L){
   vertex n = G.size();
   distance dist = 0;
   size_t n_explore = 0;
@@ -95,6 +97,56 @@ auto Single_PrunedBFS(graph& G, vertex r,
   printf("  total vertices explored %lu, rounds %u\n", n_explore, dist);
 }
 
+template <typename vertex, typename distance, typename graph, typename bits>
+auto BitwiseMulti_BFS(graph&GT, vertex offset,
+      sequence<vertex>& orders,
+      sequence<vertex>& inv_orders){
+  vertex n = GT.size();
+  vertex n_bits = sizeof(bits)*8;
+  distance INF = std::numeric_limits<distance>::max();
+  bits ALL = std::numeric_limits<bits>::max();
+  auto visited = tabulate<bits>(n, [](vertex i){return 0;});
+  auto distances = tabulate(n, [&](vertex i){return tabulate<distance>(n_bits, [INF](vertex i){return INF;});});
+  auto changed = tabulate<bool>(n, [&](vertex i){return false;});
+  for (int i = 0; i<n_bits;i++){
+    visited[orders[offset+i]] = (bits)1<<i;
+    distances[orders[offset+i]][i] = 0;
+    changed[orders[offset+i]] = true;
+  }
+  distance dist = 0;
+  // not sure whether reduce(sequence<bool>) is true/false or size_t
+  while (dist == 0 || parlay::count(changed, true)!=0){
+    dist ++;
+    printf("  round %u, frontier %u\n", dist, parlay::count(changed, true));
+    changed = tabulate(n, [&](vertex u){
+      bool result=false;
+      if (visited[u]!= ALL){
+        parallel_for(0, GT[u].size(), [&](vertex j){
+          vertex v = GT[u][j];
+          if (visited[u]!= ALL && changed[v]){
+            bits diff = visited[v]&~visited[u];
+            if (diff != 0){
+              result |= true;
+              visited[u] |= visited[v];
+              for (int i = 0; i<n_bits; i++){
+                if ((diff & (bits)1<<i)!=0){
+                  distances[u][i]=dist;
+                }
+              }
+            }
+          }
+        }, 1000);
+      }
+      return result;
+    });
+  }
+  return std::make_pair(visited, distances);
+}
+
+// template <typename vertex, typename graph>
+// auto Multi_BFS(graph& G, sequence<vertex>& sources, ){
+
+// }
 template <class Graph, typename vertex, typename distance>
 auto create_PrunedLandmarkLabeling(Graph& G) {
   vertex n = G.size();
@@ -102,9 +154,9 @@ auto create_PrunedLandmarkLabeling(Graph& G) {
   // auto ids = tabulate(n, [&](vertex i){return (vertex)i;});
   // auto increase_orders = internal::integer_sort(make_slice(ids), [&](vertex i){return G[i].size();});
   // printf("Check sorted\n");
-  auto degrees = tabulate(n, [&](vertex i){return std::make_pair(G[i].size(), i);});
-  auto orders = parlay::map(parlay::sort(make_slice(degrees), std::greater<std::pair<size_t, vertex>>()),
-          [&](auto kv){return std::get<1>(kv);});
+  auto degrees = parlay::sort(tabulate(n, [&](vertex i){return std::make_pair(G[i].size(), i);}));
+  // auto orders = parlay::map(parlay::sort(make_slice(tabulate(n, [&](vertex i){return std::make_pair(G[i].size(), i);})), std::greater<std::pair<size_t, vertex>>()),[&](auto kv){return std::get<1>(kv);});
+  auto orders = tabulate(n, [&](vertex i){return std::get<1>(degrees[i]);});
   printf("get orders\n");
   auto inv_orders = sequence<vertex>(n);
   parallel_for(0, n, [&] (vertex i){ inv_orders[orders[i]] = i;});
@@ -112,16 +164,20 @@ auto create_PrunedLandmarkLabeling(Graph& G) {
 
   // empty le-lists
   printf("Initial Labelings\n");
-  PrunedLandmarkLabeling<vertex, distance> L(n);
+  PrunedLandmarkLabeling<vertex, distance, uint64_t> L(n);
   
   
-  // BFS one by one; TODO: change latter rounds to prefix-doubling
-  for(vertex i = 0; i <n; i++){
-    vertex r = orders[i];
-    printf("BFS from %u, degree: %lu\n", r,G[r].size());
-    Single_PrunedBFS(G, r, orders, inv_orders,  L);
+  for(vertex i = 0; i <std::min((unsigned)256,n); i+=64){
+    printf("BFS round %u\n", i);
+    // Single_PrunedBFS(G, r, orders, inv_orders,  L);
+    auto result = BitwiseMulti_BFS<vertex, distance,Graph, uint64_t>(
+      G, i,orders,inv_orders);
+    L.bitwise_indexv[int(i/64)] = std::get<0>(result);
+    L.bitwise_indexd[int(i/64)] = std::get<1>(result);
   }
-  
+  // for (vertex i = min(4,n); i<n; i++){
 
-  return L.pack();
+  // }
+
+  // return L.pack();
 }

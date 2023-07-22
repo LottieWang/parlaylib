@@ -35,13 +35,13 @@ int main(int argc, char* argv[]) {
       GT = utils::transpose(G);
     }
     utils::print_graph_stats(G);
-    result result;
+    // result result;
     parlay::internal::timer t("Time");
     for (int i=0; i < 1; i++) {
-      result = create_PrunedLandmarkLabeling<graph, vertex, distance>(G);
+      create_PrunedLandmarkLabeling<graph, vertex, distance>(G);
       t.next("2hop_cover");
     }
-    long total = reduce(map(std::get<0>(result), parlay::size_of()));
-    std::cout << "Average label size: " << ((double) total/(double)n) << std::endl;
+    // long total = reduce(map(std::get<0>(result), parlay::size_of()));
+    // std::cout << "Average label size: " << ((double) total/(double)n) << std::endl;
   }
 }
