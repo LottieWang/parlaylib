@@ -225,13 +225,14 @@ struct graph_utils {
     parlay::sequence<uint32_t> edge(m);
     ifs.read(reinterpret_cast<char*>(offset.begin()), (n + 1) * 8);
     ifs.read(reinterpret_cast<char*>(edge.begin()), m * 4);
+    auto edges = parlay::tabulate(m, [&](vertex i){return (vertex)edge[i];});
     if (ifs.peek() != EOF) {
       std::cerr << "Error: Bad data\n";
       abort();
     }
     ifs.close();
     return parlay::tabulate(n, [&] (long i){
-      return to_sequence(edge.cut(offset[i], offset[i+1]));});
+      return to_sequence(edges.cut(offset[i], offset[i+1]));});
   }
 
   // assumes each edge is kept in just one direction, so copied into other
