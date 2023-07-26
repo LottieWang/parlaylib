@@ -6,10 +6,11 @@
 
 #include <parlay/primitives.h>
 #include <parlay/sequence.h>
+#include "BFS_ligra.h"
 
 
-#include "helper/ligra_light.h"
-
+// #include "helper/ligra_light.h"
+uint32_t n_bits= 64;
 // **************************************************************
 // Parallel Breadth First Search (Using the Ligra interface)
 // The graph is a sequence of sequences of vertex ids, representing
@@ -98,13 +99,31 @@ auto Single_PrunedBFS(graph& G, vertex r,
   printf("  total vertices explored %lu, rounds %u\n", n_explore, dist);
 }
 
+
+template <typename vertex, typename distance, typename graph>
+  auto Single_BFS(graph& G, vertex r){
+    auto result = BFS(r, G, G);
+    for (vertex i = 0; i<result.size(); i++){
+      printf("round %u, frontier %u\n", i+1, result[i].size());
+    }
+    distance INF8 = std::numeric_limits<distance>::max();
+    auto distances = parlay::tabulate(G.size(), [&](vertex i){return INF8;});
+    parlay::parallel_for(0, result.size(), [&](distance dist){
+      parallel_for(0, result[dist].size(), [&](vertex j){
+        distances[result[dist][j]]=dist;
+      });
+    });
+    return distances;
+  }
+
+
 template <typename vertex, typename distance, typename graph>
 auto BitwiseMulti_BFS(graph&GT, vertex offset,
       sequence<vertex>& orders,
       sequence<vertex>& inv_orders,
       sequence<sequence<distance>>& Ldistances){
   vertex n = GT.size();
-  vertex n_bits = sizeof(uint64_t)*8;
+  // vertex n_bits = sizeof(uint64_t)*8;
   distance INF = std::numeric_limits<distance>::max();
   uint64_t ALL = std::numeric_limits<uint64_t>::max();
   auto visited = tabulate<uint64_t>(n, [](vertex i){return 0;});
@@ -117,29 +136,31 @@ auto BitwiseMulti_BFS(graph&GT, vertex offset,
   }
   distance dist = 0;
   // not sure whether reduce(sequence<bool>) is true/false or size_t
-  while (dist == 0 || parlay::count(changed, true)!=0){
+  while (parlay::count(changed, true) !=0){
     dist ++;
     printf("  round %u, frontier %u\n", dist, parlay::count(changed, true));
-    changed = tabulate(n, [&](vertex u){
-      bool result=false;
-      if (visited[u]!= ALL){
+    visited = tabulate(n, [&](vertex u){
+      bool local_change=false;
+      uint64_t visited_next = visited[u];
+      if (visited_next!= ALL){
         parallel_for(0, GT[u].size(), [&](vertex j){
           vertex v = GT[u][j];
-          if (visited[u]!= ALL && changed[v]){
-            uint64_t diff = visited[v]&~visited[u];
-            if (diff != 0){
-              result |= true;
-              visited[u] |= visited[v];
-              for (int i = 0; i<n_bits; i++){
-                if ((diff & (uint64_t)1<<i)!=0){
-                  distances[u][i]=dist;
-                }
-              }
-            }
+          if (visited_next!= ALL){
+            visited_next |= visited[v];
           }
         }, 1000);
+        uint64_t diff = visited_next &~ visited[u];
+        if (diff != 0){
+          local_change=true;
+          for (int i = 0; i<n_bits; i++){
+            if ((diff & (uint64_t)1<<i) != 0){
+              distances[u][i]=dist;
+            }
+          }
+        }
       }
-      return result;
+      changed[u]=local_change;
+      return visited_next;
     });
   }
   // May limit the performance, rewrite latter
@@ -155,15 +176,13 @@ auto Multi_BFS(graph& G, vertex start, vertex end,
     sequence<vertex> que;
     std::unordered_set<vertex> visited;
     sequence<std::pair<vertex, std::pair<vertex, distance>>> distances;
-    vertex n_bits = sizeof(uint64_t)*8;
+    // vertex n_bits = sizeof(uint64_t)*8;
     vertex que_t0=0, que_t1=0, que_h=0;
     que.push_back(r); que_h++;
     visited.insert(r);
     que_t1 = que_h;
     distance INF8 = std::numeric_limits<distance>::max();
     
-    auto dist_r = tabulate(G.size(),[&](vertex i){return INF8;});
-    parallel_for(0, L.index_v[r].size(), [&](vertex i){dist_r[L.index_v[r][i]]=L.index_d[r][i];});
     for (distance dist = 0; que_t0<que_h; ++dist){
       // printf("  source %u round %u explore %u\n", r, dist, que_t1-que_t0);
       for (vertex que_i=que_t0; que_i < que_t1; ++que_i){
@@ -176,23 +195,31 @@ auto Multi_BFS(graph& G, vertex start, vertex end,
         // Prune 1
         bool prune = false;
         distance td = INF8;
-        // for (vertex i = 0; i<kNumBitParallelRoots*n_bits && (!prune); i++){
         for (vertex i = 0; i<L.bitwise_indexd[0].size() && (!prune); i++){
           distance old_d = L.bitwise_indexd[r][i]+L.bitwise_indexd[v][i];
           td = std::min(td, old_d);
           if (td <= dist){
             prune=true;
-            // printf("Prune 1: %u + %u <= %u\n", L.bitwise_indexd[r][i], L.bitwise_indexd[v][i], dist);
             break;
           }
         }
         if (prune) {continue;}
         // printf("  source %u vertex %u begin prune cheking 2\n", r,v);
-        for (vertex i = 0; i<L.index_v[v].size(); i++){
-          distance old_d = dist_r[L.index_v[v][i]] + L.index_d[v][i];
-          if (old_d<=dist){
-            prune = true;
-            break;
+        vertex i = 0, j= 0;
+        while (i<L.index_v[v].size() && j < L.index_v[r].size()){
+          if (L.index_v[v][i]==L.index_v[r][j]){
+            distance old_d = L.index_d[v][i]+L.index_d[r][j];
+            if (old_d<=dist){
+              prune = true;
+              break;
+            }
+            i++; j++;
+          }else {
+            if (L.index_v[v][i] < L.index_v[r][j]){
+              i++;
+            }else{
+              j++;
+            }
           }
         }
         if (prune) {
@@ -237,24 +264,20 @@ auto create_PrunedLandmarkLabeling(Graph& G) {
   printf("Initial Labelings\n");
   PrunedLandmarkLabeling<vertex, distance, kNumBitParallelRoots> L(n);
   
-  vertex n_bits = 64;
+  // vertex n_bits = 64;
   for(vertex i = 0; i <kNumBitParallelRoots; i+=1){
-  // for(vertex i = 0; i <2; i+=1){
     printf("BFS round %u\n", i);
     BitwiseMulti_BFS<vertex, distance,Graph>(
       G, i*n_bits, orders, inv_orders, L.bitwise_indexd);
     printf("bitwiseLabeling_size: %lu x %lu\n", (L.bitwise_indexd).size(), L.bitwise_indexd[0].size());    
   }
-  vertex step = 64;
+  vertex step = 10;
   double beta = 1.2;
   vertex start = kNumBitParallelRoots*n_bits;
   int round = 0;
-  while (start < n){    
+  while (start < n){
     vertex end = std::min(start + step, n);
     printf("Multi_BFS round %u: batch_size %u\n", round, end-start);
-    // for (vertex j =start; j<end; j++){
-    //   printf("source: %u degree: %lu\n", orders[j], G[orders[j]].size());
-    // }
     Multi_BFS(G, start, end, orders,inv_orders,L);
     start = end;
     step = std::ceil(step*beta);
