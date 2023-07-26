@@ -38,7 +38,7 @@ int main(int argc, char* argv[]) {
     // result result;
     parlay::internal::timer t("Time");
     for (int i=0; i < 1; i++) {
-      create_PrunedLandmarkLabeling<graph, vertex, distance, 8>(G);
+      create_PrunedLandmarkLabeling<graph, vertex, distance, 32>(G);
       t.next("2hop_cover");
     }
     // long total = reduce(map(std::get<0>(result), parlay::size_of()));
