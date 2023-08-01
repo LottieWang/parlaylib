@@ -129,9 +129,9 @@ template <typename vertex, typename distance, typename graph, int kNumBitParalle
   std::vector<std::pair<std::vector<vertex>, std::vector<distance> > >
         tmp_idx(n, std::make_pair(std::vector<vertex>(1, n),
                              std::vector<distance>(1, INF8)));
-  sequence<bool> vis(n);  
-  sequence<vertex> que(n);
-  sequence<distance> dst_r(n+1, INF8); 
+  std::vector<bool> vis(n);  
+  std::vector<vertex> que(n);
+  std::vector<distance> dst_r(n+1, INF8); 
   long int total_size = 0; 
   vertex que_t0=0, que_t1=0, que_h=0;
   for (vertex r = 0; r<n; r++){
