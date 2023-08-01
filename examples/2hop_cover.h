@@ -3,6 +3,8 @@
 #include <limits>
 #include <unordered_set>
 #include <bitset>
+#include <xmmintrin.h>
+
 
 #include <parlay/primitives.h>
 #include <parlay/sequence.h>
@@ -28,6 +30,8 @@ using namespace parlay;
 
 template <typename vertex, typename distance, int kNumBitParallelRoots>
 class PrunedLandmarkLabeling{
+  private:
+    static const distance INF8=100;
   public:
     // constexpr distance INF_D = std::numeric_limits<distance>::max();
     distance INF_D = std::numeric_limits<distance>::max();
@@ -106,7 +110,7 @@ template <typename vertex, typename distance, typename graph>
     for (vertex i = 0; i<result.size(); i++){
       printf("round %u, frontier %u\n", i+1, result[i].size());
     }
-    distance INF8 = std::numeric_limits<distance>::max();
+    static const uint8_t INF8 = 100;
     auto distances = parlay::tabulate(G.size(), [&](vertex i){return INF8;});
     parlay::parallel_for(0, result.size(), [&](distance dist){
       parallel_for(0, result[dist].size(), [&](vertex j){
@@ -116,62 +120,83 @@ template <typename vertex, typename distance, typename graph>
     return distances;
   }
 
-template <typename vertex, typename distance, typename graph>
-  auto BFS_Pruned(graph& G, vertex r, sequence<sequence<distance>>& bitwise_dist, sequence<sequence<vertex>>& label_v, 
-  sequence<sequence<distance>>& label_d,
+template <typename vertex, typename distance, typename graph, int kNumBitParallelRoots>
+  auto Pruned_labeling(graph& G, vertex offset, sequence<sequence<distance>>& bitwise_dist,
   sequence<vertex>& orders,
   sequence<vertex>& inv_orders){
-  sequence<vertex> que;
-  std::unordered_set<vertex> visited;
-  sequence<std::pair<vertex, distance>> distances;
+  vertex n = G.size();
+  static const distance INF8 = 100;  
+  sequence<std::pair<sequence<vertex>, sequence<distance> > >
+        tmp_idx(n, std::make_pair(sequence<vertex>(1, n),
+                             sequence<distance>(1, INF8)));
+  sequence<bool> vis(n);  
+  sequence<vertex> que(n);
+  sequence<distance> dst_r(n+1, INF8); 
+  long int total_size = 0; 
   vertex que_t0=0, que_t1=0, que_h=0;
-  que.push_back(r); que_h++;
-  visited.insert(r);
-  que_t1 = que_h;
-  for (distance dist = 0; que_t0<que_h; ++dist){
-    for (vertex que_i=que_t0; que_i < que_t1; ++que_i){
-      vertex v = que[que_i];
-      if (inv_orders[v] < inv_orders[r]){continue;}
-      // Prune 1
-      bool prune = false;
-      for (vertex i = 0; i<bitwise_dist[0].size(); i++){
-        if (prune) {break;}
-        distance old_d = bitwise_dist[r][i]+bitwise_dist[v][i];
-        if (old_d <= dist){
-          prune=true;
-          break;
-        }
-      }
-      if (prune) {continue;}
-      // Prune 2
-      vertex i = 0, j= 0;
-      while (i<label_v[v].size() && j < label_v[r].size()){
-        if (label_v[v][i]==label_v[r][j]){
-          distance old_d = label_d[v][i]+label_d[r][j];
-          if (old_d<=dist){
-            prune = true;
-            break;
-          }
-          i++; j++;
-        }else {
-          i += label_v[v][i] < label_v[r][j] ? 1 : 0;
-          j += label_v[v][i] > label_v[r][j] ? 1 : 0;
-        }
-      }
-      if (prune) {continue;}
-      // traverse
-      distances.push_back(std::make_pair(v, dist));
-      for (vertex i = 0; i<G[v].size(); i++){
-        vertex u = G[v][i];
-        if (std::get<1>(visited.insert(u))){
-          que.push_back(u); que_h++;
-        }
-      }
+  for (vertex rr = offset; rr<n; rr++){
+    vertex r = orders[rr];
+    sequence<distance> &idx_r = bitwise_dist[r];
+    std::pair<sequence<vertex>, sequence<distance>> & tmp_idx_r = tmp_idx[r];
+    for (size_t i = 0; i<tmp_idx_r.first.size(); i++){
+      dst_r[tmp_idx_r.first[i]]=tmp_idx_r.second[i];
     }
+    int que_t0=0, que_t1=0, que_h=0;
+    que[que_h++]=r;
+    vis[r]=true;
+    que_t1=que_h;
+    for (distance d = 0; que_t0<que_h; d++){
+      for (vertex que_i = que_t0; que_i <que_t1; que_i++){
+        vertex v = que[que_i];
+        std::pair<sequence<vertex>, sequence<distance>> & tmp_idx_v = tmp_idx[v];
+        sequence<distance> & idx_v = bitwise_dist[v];
+
+        // Prefetch
+        _mm_prefetch(&idx_v[0], _MM_HINT_T0);
+        _mm_prefetch(&tmp_idx_v.first[0], _MM_HINT_T0);
+        _mm_prefetch(&tmp_idx_v.second[0], _MM_HINT_T0);
+
+        if (inv_orders[v] < offset){continue;}
+        for (vertex i = 0;i<n_bits*kNumBitParallelRoots; i++){
+          distance td = idx_r[i]+idx_v[i];
+          if (td<=d) goto pruned;
+        }
+
+        for (size_t i = 0; i<tmp_idx_v.first.size(); ++i){
+          vertex w = tmp_idx_v.first[i];
+          distance td= tmp_idx_v.second[i]+dst_r[w];
+          if (td<=d) goto pruned;
+        }
+
+        // Traverse
+        tmp_idx_v.first.back() = r;
+        tmp_idx_v.second.back()=d;
+        tmp_idx_v.first.push_back(n);
+        tmp_idx_v.second.push_back(INF8);
+        for (size_t i = 0; i<G[v].size(); i++){
+          vertex w = G[v][i];
+          if (!vis[w]){
+            que[que_h++] = w;
+            vis[w]=true;
+          }
+        }
+      pruned:
+        {}
+      }
       que_t0 = que_t1;
       que_t1 = que_h;
+    }
+    for (vertex i = 0; i<que_h; i++) vis[que[i]]=false;
+    for (size_t i = 0; i<tmp_idx_r.first.size(); ++i){
+      dst_r[tmp_idx_r.first[i]]=INF8;
+    }
+    offset +=1;
+    printf("vertex %d explore %d\n", rr, que_h);
+    total_size += que_h;
   }
-  return distances;
+  long total = reduce(map(tmp_idx, [&](auto p){return p.first.size()-1;}));
+  printf("average normal label size %f\n", (double)total/(double)n);
+  printf("total explored nodes: %ld\n", total_size);
 }
 
 template <typename vertex, typename distance, typename graph>
@@ -195,7 +220,7 @@ auto BitwiseMulti_BFS(graph&GT, vertex offset,
   // not sure whether reduce(sequence<bool>) is true/false or size_t
   while (parlay::count(changed, true) !=0){
     dist ++;
-    printf("  round %u, frontier %u\n", dist, parlay::count(changed, true));
+    // printf("  round %u, frontier %u\n", dist, parlay::count(changed, true));
     visited = tabulate(n, [&](vertex u){
       bool local_change=false;
       uint64_t visited_next = visited[u];
@@ -295,7 +320,7 @@ auto Multi_BFS(graph& G, vertex start, vertex end,
     return distances;
   });
   auto pairs = flatten(label_pairs);
-  printf("# labels added: %lu\n", pairs.size());
+  // printf("# labels added: %lu\n", pairs.size());
   auto indexs = group_by_index(pairs, G.size());
   parallel_for(0, G.size(), [&](vertex i){
     L.index_v[i].append(map(indexs[i], [&](auto p){return std::get<0>(p);}));
@@ -305,47 +330,53 @@ auto Multi_BFS(graph& G, vertex start, vertex end,
 template <class Graph, typename vertex, typename distance, int kNumBitParallelRoots>
 auto create_PrunedLandmarkLabeling(Graph& G) {
   vertex n = G.size();
-
-  auto degrees = parlay::sort(tabulate(n, [&](vertex i){return std::make_pair(G[i].size(), i);}));
-  auto orders = tabulate(n, [&](vertex i){return std::get<1>(degrees[n-1-i]);});
-  printf("get orders\n");
-  auto inv_orders = sequence<vertex>(n);
-  parallel_for(0, n, [&] (vertex i){ inv_orders[orders[i]] = i;});
-  printf("get inverse orders\n");
+  parlay::internal::timer t("Indexing");
+  // auto degrees = parlay::sort(tabulate(n, [&](vertex i){return std::make_pair(G[i].size(), i);}));
+  // auto orders = tabulate(n, [&](vertex i){return std::get<1>(degrees[n-1-i]);});
+  // printf("get orders\n");
+  // auto inv_orders = sequence<vertex>(n);
+  // parallel_for(0, n, [&] (vertex i){ inv_orders[orders[i]] = i;});
+  // printf("get inverse orders\n");
+  std::vector<std::pair<float, vertex> > deg(n);
+  for (vertex v = 0; v < n; ++v) {
+    // We add a random value here to diffuse nearby vertices
+    deg[v] = std::make_pair(G[v].size() + float(rand()) / RAND_MAX, v);
+  }
+  std::sort(deg.rbegin(), deg.rend());
+  sequence<vertex> orders(n);
+  sequence<vertex> inv_orders(n);
+  for (vertex i = 0; i < n; ++i) {
+    orders[i] = deg[i].second;
+    inv_orders[deg[i].second]=i;
+  }
 
   // empty le-lists
   printf("Initial Labelings\n");
   PrunedLandmarkLabeling<vertex, distance, kNumBitParallelRoots> L(n);
   
   // vertex n_bits = 64;
+  t.next("loading");
   for(vertex i = 0; i <kNumBitParallelRoots; i+=1){
-    printf("BFS round %u\n", i);
+    // printf("BFS round %u\n", i);
     BitwiseMulti_BFS<vertex, distance,Graph>(
       G, i*n_bits, orders, inv_orders, L.bitwise_indexd);
-    printf("bitwiseLabeling_size: %lu x %lu\n", (L.bitwise_indexd).size(), L.bitwise_indexd[0].size());    
+    // printf("bitwiseLabeling_size: %lu x %lu\n", (L.bitwise_indexd).size(), L.bitwise_indexd[0].size());    
   }
-  vertex step = 10;
-  double beta = 1.2;
-  vertex start = kNumBitParallelRoots*n_bits;
-  int round = 0;
-  while (start < n){
-    vertex end = std::min(start + step, n);
-    printf("Multi_BFS round %u: batch_size %u\n", round, end-start);
-    Multi_BFS(G, start, end, orders,inv_orders,L);
-    start = end;
-    step = std::ceil(step*beta);
-    round++;
-  }
-  // for (int i = kNumBitParallelRoots*n_bits; i<n; i++){
-  //   auto distances = BFS_Pruned(G, orders[i], L.bitwise_indexd, 
-  //       L.index_v,L.index_d,orders, inv_orders);
-  //   printf("round %d add %u labels\n", i, distances.size());
-  //   parallel_for(0, distances.size(), [&](vertex j){
-  //     auto p = distances[j];
-  //     L.index_v[std::get<0>(p)].push_back(i);
-  //     L.index_d[std::get<0>(p)].push_back(std::get<1>(p));
-  //   });
+  t.next("bitwise index");
+  // vertex step = 10;
+  // double beta = 1.2;
+  // vertex start = kNumBitParallelRoots*n_bits;
+  // int round = 0;
+  // while (start < n){
+  //   vertex end = std::min(start + step, n);
+  //   // printf("Multi_BFS round %u: batch_size %u\n", round, end-start);
+  //   Multi_BFS(G, start, end, orders,inv_orders,L);
+  //   start = end;
+  //   step = std::ceil(step*beta);
+  //   round++;
   // }
-
-  // return L.pack();
+  // t.next("pruned index");
+  Pruned_labeling<vertex, distance, Graph, kNumBitParallelRoots>(G, n_bits*kNumBitParallelRoots, L.bitwise_indexd, orders, inv_orders);
+  t.next("pruned labeling");
+  return L.pack();
 }
