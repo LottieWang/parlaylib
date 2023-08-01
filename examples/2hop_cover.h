@@ -121,9 +121,8 @@ template <typename vertex, typename distance, typename graph>
   }
 
 template <typename vertex, typename distance, typename graph, int kNumBitParallelRoots>
-  auto Pruned_labeling(graph& G, vertex offset, sequence<sequence<distance>>& bitwise_dist,
-  sequence<vertex>& orders,
-  sequence<vertex>& inv_orders){
+  auto Pruned_labeling(graph& G, sequence<sequence<distance>>& bitwise_dist, 
+                      sequence<bool>& usd){
   vertex n = G.size();
   static const distance INF8 = 100;  
   sequence<std::pair<sequence<vertex>, sequence<distance> > >
@@ -134,8 +133,8 @@ template <typename vertex, typename distance, typename graph, int kNumBitParalle
   sequence<distance> dst_r(n+1, INF8); 
   long int total_size = 0; 
   vertex que_t0=0, que_t1=0, que_h=0;
-  for (vertex rr = offset; rr<n; rr++){
-    vertex r = orders[rr];
+  for (vertex r = 0; r<n; r++){
+    if (usd[r]) continue;
     sequence<distance> &idx_r = bitwise_dist[r];
     std::pair<sequence<vertex>, sequence<distance>> & tmp_idx_r = tmp_idx[r];
     for (size_t i = 0; i<tmp_idx_r.first.size(); i++){
@@ -148,6 +147,7 @@ template <typename vertex, typename distance, typename graph, int kNumBitParalle
     for (distance d = 0; que_t0<que_h; d++){
       for (vertex que_i = que_t0; que_i <que_t1; que_i++){
         vertex v = que[que_i];
+        if (usd[v]) continue;
         std::pair<sequence<vertex>, sequence<distance>> & tmp_idx_v = tmp_idx[v];
         sequence<distance> & idx_v = bitwise_dist[v];
 
@@ -156,7 +156,6 @@ template <typename vertex, typename distance, typename graph, int kNumBitParalle
         _mm_prefetch(&tmp_idx_v.first[0], _MM_HINT_T0);
         _mm_prefetch(&tmp_idx_v.second[0], _MM_HINT_T0);
 
-        if (inv_orders[v] < offset){continue;}
         for (vertex i = 0;i<n_bits*kNumBitParallelRoots; i++){
           distance td = idx_r[i]+idx_v[i];
           if (td<=d) goto pruned;
@@ -190,8 +189,8 @@ template <typename vertex, typename distance, typename graph, int kNumBitParalle
     for (size_t i = 0; i<tmp_idx_r.first.size(); ++i){
       dst_r[tmp_idx_r.first[i]]=INF8;
     }
-    offset +=1;
-    printf("vertex %d explore %d\n", rr, que_h);
+    usd[r]=true;
+    printf("vertex %d explore %d\n", r, que_h);
     total_size += que_h;
   }
   long total = reduce(map(tmp_idx, [&](auto p){return p.first.size()-1;}));
@@ -201,9 +200,8 @@ template <typename vertex, typename distance, typename graph, int kNumBitParalle
 
 template <typename vertex, typename distance, typename graph>
 auto BitwiseMulti_BFS(graph&GT, vertex offset,
-      sequence<vertex>& orders,
-      sequence<vertex>& inv_orders,
-      sequence<sequence<distance>>& Ldistances){
+      sequence<sequence<distance>>& Ldistances,
+      sequence<bool>& usd){
   vertex n = GT.size();
   // vertex n_bits = sizeof(uint64_t)*8;
   distance INF = std::numeric_limits<distance>::max();
@@ -212,9 +210,10 @@ auto BitwiseMulti_BFS(graph&GT, vertex offset,
   auto distances = tabulate(n, [&](vertex i){return tabulate<distance>(n_bits, [INF](vertex i){return INF;});});
   auto changed = tabulate<bool>(n, [&](vertex i){return false;});
   for (int i = 0; i<n_bits; i++){
-    visited[orders[offset+i]] = (uint64_t)1<<i;
-    distances[orders[offset+i]][i] = 0;
-    changed[orders[offset+i]] = true;
+    visited[offset+i] = (uint64_t)1<<i;
+    distances[offset+i][i] = 0;
+    changed[offset+i] = true;
+    usd[offset+i]=true;
   }
   distance dist = 0;
   // not sure whether reduce(sequence<bool>) is true/false or size_t
@@ -330,6 +329,7 @@ auto Multi_BFS(graph& G, vertex start, vertex end,
 template <class Graph, typename vertex, typename distance, int kNumBitParallelRoots>
 auto create_PrunedLandmarkLabeling(Graph& G) {
   vertex n = G.size();
+  sequence<bool> usd(n, false);
   parlay::internal::timer t("Indexing");
   // auto degrees = parlay::sort(tabulate(n, [&](vertex i){return std::make_pair(G[i].size(), i);}));
   // auto orders = tabulate(n, [&](vertex i){return std::get<1>(degrees[n-1-i]);});
@@ -350,6 +350,10 @@ auto create_PrunedLandmarkLabeling(Graph& G) {
     inv_orders[deg[i].second]=i;
   }
 
+  auto newG =  parlay::tabulate(n, [&] (vertex i) {
+      return parlay::map(G[orders[i]], [&](vertex j){return inv_orders[j];});});  
+  
+
   // empty le-lists
   printf("Initial Labelings\n");
   PrunedLandmarkLabeling<vertex, distance, kNumBitParallelRoots> L(n);
@@ -359,7 +363,7 @@ auto create_PrunedLandmarkLabeling(Graph& G) {
   for(vertex i = 0; i <kNumBitParallelRoots; i+=1){
     // printf("BFS round %u\n", i);
     BitwiseMulti_BFS<vertex, distance,Graph>(
-      G, i*n_bits, orders, inv_orders, L.bitwise_indexd);
+      newG, i*n_bits, L.bitwise_indexd, usd);
     // printf("bitwiseLabeling_size: %lu x %lu\n", (L.bitwise_indexd).size(), L.bitwise_indexd[0].size());    
   }
   t.next("bitwise index");
@@ -376,7 +380,7 @@ auto create_PrunedLandmarkLabeling(Graph& G) {
   //   round++;
   // }
   // t.next("pruned index");
-  Pruned_labeling<vertex, distance, Graph, kNumBitParallelRoots>(G, n_bits*kNumBitParallelRoots, L.bitwise_indexd, orders, inv_orders);
+  Pruned_labeling<vertex, distance, Graph, kNumBitParallelRoots>(newG, L.bitwise_indexd, usd);
   t.next("pruned labeling");
   return L.pack();
 }
