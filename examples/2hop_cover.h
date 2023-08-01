@@ -4,6 +4,7 @@
 #include <unordered_set>
 #include <bitset>
 #include <xmmintrin.h>
+#include <vector>
 
 
 #include <parlay/primitives.h>
@@ -125,9 +126,9 @@ template <typename vertex, typename distance, typename graph, int kNumBitParalle
                       sequence<bool>& usd){
   vertex n = G.size();
   static const distance INF8 = 100;  
-  sequence<std::pair<sequence<vertex>, sequence<distance> > >
-        tmp_idx(n, std::make_pair(sequence<vertex>(1, n),
-                             sequence<distance>(1, INF8)));
+  std::vector<std::pair<std::vector<vertex>, std::vector<distance> > >
+        tmp_idx(n, std::make_pair(std::vector<vertex>(1, n),
+                             std::vector<distance>(1, INF8)));
   sequence<bool> vis(n);  
   sequence<vertex> que(n);
   sequence<distance> dst_r(n+1, INF8); 
@@ -136,7 +137,7 @@ template <typename vertex, typename distance, typename graph, int kNumBitParalle
   for (vertex r = 0; r<n; r++){
     if (usd[r]) continue;
     sequence<distance> &idx_r = bitwise_dist[r];
-    std::pair<sequence<vertex>, sequence<distance>> & tmp_idx_r = tmp_idx[r];
+    std::pair<std::vector<vertex>, std::vector<distance>> & tmp_idx_r = tmp_idx[r];
     for (size_t i = 0; i<tmp_idx_r.first.size(); i++){
       dst_r[tmp_idx_r.first[i]]=tmp_idx_r.second[i];
     }
@@ -148,13 +149,13 @@ template <typename vertex, typename distance, typename graph, int kNumBitParalle
       for (vertex que_i = que_t0; que_i <que_t1; que_i++){
         vertex v = que[que_i];
         if (usd[v]) continue;
-        std::pair<sequence<vertex>, sequence<distance>> & tmp_idx_v = tmp_idx[v];
+        std::pair<std::vector<vertex>, std::vector<distance>> & tmp_idx_v = tmp_idx[v];
         sequence<distance> & idx_v = bitwise_dist[v];
 
         // Prefetch
-        _mm_prefetch(&idx_v[0], _MM_HINT_T0);
-        _mm_prefetch(&tmp_idx_v.first[0], _MM_HINT_T0);
-        _mm_prefetch(&tmp_idx_v.second[0], _MM_HINT_T0);
+        // _mm_prefetch(&idx_v[0], _MM_HINT_T0);
+        // _mm_prefetch(&tmp_idx_v.first[0], _MM_HINT_T0);
+        // _mm_prefetch(&tmp_idx_v.second[0], _MM_HINT_T0);
 
         for (vertex i = 0;i<n_bits*kNumBitParallelRoots; i++){
           distance td = idx_r[i]+idx_v[i];
