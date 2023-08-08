@@ -31,11 +31,9 @@ using namespace parlay;
 
 template <typename vertex, typename distance, int kNumBitParallelRoots>
 class PrunedLandmarkLabeling{
-  private:
-    static const distance INF8=100;
   public:
     // constexpr distance INF_D = std::numeric_limits<distance>::max();
-    distance INF_D = std::numeric_limits<distance>::max();
+    static const distance INF8 = 100;
     sequence<sequence<vertex>> index_v;
     sequence<sequence<distance>> index_d;
     // sequence<sequence<uint64_t>> bitwise_indexv;
@@ -64,16 +62,16 @@ auto Single_PrunedBFS(graph& G, vertex r,
   distance dist = 0;
   size_t n_explore = 0;
   // initial temp distance to INF
-  auto delta = tabulate<std::atomic<distance>>(n, [&](vertex i){return (i==r)?  0: L.INF_D;});
+  auto delta = tabulate<std::atomic<distance>>(n, [&](vertex i){return (i==r)?  0: L.INF8;});
 
   // initialize the distance from r to others
-  auto delta_r = tabulate(n, [&](vertex i){return L.INF_D;});
+  auto delta_r = tabulate(n, [&](vertex i){return L.INF8;});
   parallel_for(0, (L.index_v[r]).size(), [&](vertex i){
     delta_r[orders[L.index_v[r][i]]]=L.index_d[r][i];});
   
   // function to apply on each edge s->d
   auto edge_f = [&] (vertex s, vertex d) -> bool {
-    if (delta[d].compare_exchange_strong(L.INF_D, dist)){
+    if (delta[d].compare_exchange_strong(L.INF8, dist)){
       L.insert(d, inv_orders[r], dist);
       return true;
     }
@@ -87,7 +85,7 @@ auto Single_PrunedBFS(graph& G, vertex r,
     // check whether delta[d] can already got by previous labels
     for (size_t i = 0; i<(L.index_v[d]).size(); i++){
       vertex v = orders[L.index_v[d][i]];
-      if (delta_r[v] != L.INF_D && delta_r[v]+L.index_d[d][i] <= dist) return false;
+      if (delta_r[v] != L.INF8 && delta_r[v]+L.index_d[d][i] <= dist) return false;
     }
     return true;
   };
@@ -123,7 +121,7 @@ template <typename vertex, typename distance, typename graph>
 
 template <typename vertex, typename distance, typename graph, int kNumBitParallelRoots>
   auto Pruned_labeling(graph& G, sequence<sequence<distance>>& bitwise_dist, 
-                      sequence<bool>& usd){
+                      sequence<bool>& usd, PrunedLandmarkLabeling<vertex, distance, kNumBitParallelRoots>& L){
   vertex n = G.size();
   static const distance INF8 = 100;  
   std::vector<std::pair<std::vector<vertex>, std::vector<distance> > >
@@ -145,6 +143,7 @@ template <typename vertex, typename distance, typename graph, int kNumBitParalle
     que[que_h++]=r;
     vis[r]=true;
     que_t1=que_h;
+    long int label_size = 0;
     for (distance d = 0; que_t0<que_h; d++){
       for (vertex que_i = que_t0; que_i <que_t1; que_i++){
         vertex v = que[que_i];
@@ -169,6 +168,7 @@ template <typename vertex, typename distance, typename graph, int kNumBitParalle
         }
 
         // Traverse
+        label_size++;
         tmp_idx_v.first.back() = r;
         tmp_idx_v.second.back()=d;
         tmp_idx_v.first.push_back(n);
@@ -191,8 +191,16 @@ template <typename vertex, typename distance, typename graph, int kNumBitParalle
       dst_r[tmp_idx_r.first[i]]=INF8;
     }
     usd[r]=true;
-    printf("vertex %d explore %d\n", r, que_h);
+    // #ifdef DEBUG
+    printf("vertex %d add labels %d\n", r,         label_size);
+    // #endif
     total_size += que_h;
+  }
+  for (vertex v = 0; v < n; ++v) {
+    L.index_v[v]=tabulate(tmp_idx[v].first.size(), [&](vertex i){return tmp_idx[v].first[i];});
+    L.index_d[v]=tabulate(tmp_idx[v].second.size(), [&](vertex i){return tmp_idx[v].second[i];});
+    // tmp_idx[v].first.clear();
+    // tmp_idx[v].second.clear();
   }
   long total = reduce(map(tmp_idx, [&](auto p){return p.first.size()-1;}));
   printf("average normal label size %f\n", (double)total/(double)n);
@@ -205,10 +213,10 @@ auto BitwiseMulti_BFS(graph&GT, vertex offset,
       sequence<bool>& usd){
   vertex n = GT.size();
   // vertex n_bits = sizeof(uint64_t)*8;
-  distance INF = std::numeric_limits<distance>::max();
+  static const distance INF8 = 100;
   uint64_t ALL = std::numeric_limits<uint64_t>::max();
   auto visited = tabulate<uint64_t>(n, [](vertex i){return 0;});
-  auto distances = tabulate(n, [&](vertex i){return tabulate<distance>(n_bits, [INF](vertex i){return INF;});});
+  auto distances = tabulate(n, [&](vertex i){return tabulate<distance>(n_bits, [INF8](vertex i){return INF8;});});
   auto changed = tabulate<bool>(n, [&](vertex i){return false;});
   for (int i = 0; i<n_bits; i++){
     visited[offset+i] = (uint64_t)1<<i;
@@ -381,7 +389,7 @@ auto create_PrunedLandmarkLabeling(Graph& G) {
   //   round++;
   // }
   // t.next("pruned index");
-  Pruned_labeling<vertex, distance, Graph, kNumBitParallelRoots>(newG, L.bitwise_indexd, usd);
+  Pruned_labeling<vertex, distance, Graph, kNumBitParallelRoots>(newG, L.bitwise_indexd, usd, L);
   t.next("pruned labeling");
   return L.pack();
 }
