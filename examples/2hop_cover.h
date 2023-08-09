@@ -216,7 +216,7 @@ auto BitwiseMulti_BFS(graph&GT, vertex offset,
   static const distance INF8 = 100;
   uint64_t ALL = std::numeric_limits<uint64_t>::max();
   auto visited = tabulate<uint64_t>(n, [](vertex i){return 0;});
-  auto distances = tabulate(n, [&](vertex i){return tabulate<distance>(n_bits, [INF8](vertex i){return INF8;});});
+  auto distances = tabulate(n, [&](vertex i){return tabulate<distance>(n_bits, [](vertex i){return INF8;});});
   auto changed = tabulate<bool>(n, [&](vertex i){return false;});
   for (int i = 0; i<n_bits; i++){
     visited[offset+i] = (uint64_t)1<<i;
@@ -361,7 +361,6 @@ auto create_PrunedLandmarkLabeling(Graph& G) {
 
   auto newG =  parlay::tabulate(n, [&] (vertex i) {
       return parlay::map(G[orders[i]], [&](vertex j){return inv_orders[j];});});  
-  
 
   // empty le-lists
   printf("Initial Labelings\n");
