@@ -65,7 +65,7 @@ BitPar_BFS(const graph &G){
         }
         usd[r] = true;
         auto tmp_d = parlay::tabulate<std::atomic<distance>>(n, [](vertex i){return INF8;});
-        auto tmp_s = parlay::tabulate(n, [](vertex i){return std::make_pair<uint64_t, uint64_t>(0,0);});
+        auto tmp_s = parlay::tabulate<std::pair<std::atomic<uint64_t>, std::atomic<uint64_t>>>(n, [](vertex i){return std::make_pair(std::atomic<uint64_t>(0),std::atomic<uint64_t>(0));});
         
         tmp_d[r] = 0;
         printf("source %d\n", orders[r]);
@@ -78,22 +78,26 @@ BitPar_BFS(const graph &G){
             if (!usd[v]) {
                 usd[v] = true;
                 // tmp_d[v] = 1;
-                tmp_s[v].first = 1ULL << ns;
+                tmp_s[v].first.fetch_or(1ULL << ns);
                 if (++ns == 64) break;
             }
         }
         distance d=0;
         auto edge_f0 = [&](vertex u, vertex v) -> bool {
-            tmp_s[u].second |= tmp_s[v].first;
-            tmp_s[v].second |= tmp_s[u].first;
+            // tmp_s[u].second |= tmp_s[v].first;
+            // tmp_s[v].second |= tmp_s[u].first;
+            tmp_s[u].second.fetch_or(tmp_s[v].first);
+            tmp_s[v].second.fetch_or(tmp_s[u].first);
             return false;
         };
         auto cond_f0 = [&] (vertex v) {return tmp_d[v]==d-1;};
         auto frontier_map0 = ligra::edge_map(G, G, edge_f0, cond_f0);
 
         auto edge_f = [&] (vertex u, vertex v) -> bool {
-            tmp_s[v].first  |= tmp_s[u].first;
-            tmp_s[v].second |= tmp_s[u].second;
+            tmp_s[v].first.fetch_or(tmp_s[u].first);
+            tmp_s[v].second.fetch_or(tmp_s[u].second);
+            // tmp_s[v].first  |= tmp_s[u].first;
+            // tmp_s[v].second |= tmp_s[u].second;
             if (tmp_d[v]<INF8) return false;
             distance expected = INF8;
             return tmp_d[v].compare_exchange_strong(expected, d);};
