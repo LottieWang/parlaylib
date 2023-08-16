@@ -17,6 +17,13 @@ using distance = uint8_t;
 using nested_seq = parlay::sequence<parlay::sequence<vertex>>;
 using graph = nested_seq;
 
+struct node_info {                 // On return
+  std::atomic<ulong> s0;      // S_r^0 (from Akiba, Iwata, Yoshina paper)
+  std::atomic<ulong> s1; // S_r^{-1}
+  std::atomic<distance> d;             // P
+  node_info() : s0(0), s1(0), d((distance)100) {}
+};
+
 template<int kBitParallelRounds = 64>
 class PrunedLandmarkLabeling {
   private:
@@ -64,59 +71,67 @@ BitPar_BFS(const graph &G){
             continue;
         }
         usd[r] = true;
-        auto tmp_d = parlay::tabulate<std::atomic<distance>>(n, [](vertex i){return INF8;});
-        auto tmp_s = parlay::tabulate<std::pair<std::atomic<uint64_t>, std::atomic<uint64_t>>>(n, [](vertex i){return std::make_pair(std::atomic<uint64_t>(0),std::atomic<uint64_t>(0));});
-        
-        tmp_d[r] = 0;
-        printf("source %d\n", orders[r]);
+        parlay::sequence<node_info> nodes(n);
+        nodes[r].d=(uint8_t)0;
+        printf("source: %d ", orders[r]);
         
         int ns = 0;
         auto ngb = parlay::sort(G[r]);
-        // parlay::sort_inplace(G[r]);
         for (size_t i = 0; i < G[r].size(); ++i) {
             vertex v = ngb[i];
             if (!usd[v]) {
                 usd[v] = true;
-                // tmp_d[v] = 1;
-                tmp_s[v].first.fetch_or(1ULL << ns);
+                printf("%d ", orders[v]);
+                nodes[v].s1 =1ul << ns;
                 if (++ns == 64) break;
             }
         }
+        printf("\n");
         distance d=0;
         auto edge_f0 = [&](vertex u, vertex v) -> bool {
-            // tmp_s[u].second |= tmp_s[v].first;
-            // tmp_s[v].second |= tmp_s[u].first;
-            tmp_s[u].second.fetch_or(tmp_s[v].first);
-            tmp_s[v].second.fetch_or(tmp_s[u].first);
+            uint64_t tmp_u = nodes[u].s1.load();
+            // uint64_t tmp_v = nodes[v].s1.load();
+            // nodes[u].s0.fetch_or(tmp_v);
+            uint64_t tmp_v = nodes[v].s0.load();
+            if ((tmp_v|tmp_u) != tmp_v)
+              nodes[v].s0.fetch_or(tmp_u);
             return false;
         };
-        auto cond_f0 = [&] (vertex v) {return tmp_d[v]==d-1;};
+        auto cond_f0 = [&] (vertex v) {return nodes[v].d.load()==d;};
         auto frontier_map0 = ligra::edge_map(G, G, edge_f0, cond_f0);
 
         auto edge_f = [&] (vertex u, vertex v) -> bool {
-            tmp_s[v].first.fetch_or(tmp_s[u].first);
-            tmp_s[v].second.fetch_or(tmp_s[u].second);
             // tmp_s[v].first  |= tmp_s[u].first;
             // tmp_s[v].second |= tmp_s[u].second;
-            if (tmp_d[v]<INF8) return false;
+            uint64_t tmp_u0 = nodes[u].s0.load();
+            uint64_t tmp_v0 = nodes[v].s0.load();
+            if ((tmp_u0 | tmp_v0) != tmp_v0){
+              nodes[v].s0.fetch_or(tmp_u0);
+            }
+            uint64_t tmp_u1 = nodes[u].s1.load();
+            uint64_t tmp_v1 = nodes[v].s1.load();
+            if ((tmp_u1|tmp_v1) != tmp_v1){
+              nodes[v].s1.fetch_or(tmp_u1);
+            }
+            if (nodes[v].d.load()<INF8) return false;
             distance expected = INF8;
-            return tmp_d[v].compare_exchange_strong(expected, d);};
-        auto cond_f = [&] (vertex v) {return tmp_d[v]>=d;};
+            return nodes[v].d.compare_exchange_strong(expected, d);};
+        auto cond_f = [&] (vertex v) {return nodes[v].d.load()>=d;};
         auto frontier_map = ligra::edge_map(G, G, edge_f, cond_f);
         
 
         auto frontier = ligra::vertex_subset(r);
         // nested_seq frontiers;
         while (frontier.size() > 0) {
-            printf("round %d frontier %d\n", d, frontier.size());
+            // printf("round %d frontier %d\n", d, frontier.size());
             d++;
-            frontier_map0(frontier);
             frontier = frontier_map(frontier);
+            frontier_map0(frontier);
         }
         for (vertex v = 0; v < n; ++v) {
-            index_[orders[v]].bpspt_d[i_bpspt] = tmp_d[v];
-            index_[orders[v]].bpspt_s0[i_bpspt] = tmp_s[v].first;
-            index_[orders[v]].bpspt_s1[i_bpspt] = tmp_s[v].second & ~tmp_s[v].first;
+            index_[orders[v]].bpspt_d[i_bpspt] = nodes[v].d.load();
+            index_[orders[v]].bpspt_s1[i_bpspt] = nodes[v].s1.load();
+            index_[orders[v]].bpspt_s0[i_bpspt] = nodes[v].s0.load() &~nodes[v].s1.load();
         }
     }
 }
@@ -163,7 +178,7 @@ Pruned_labeling(const graph &G){
             int td = idx_r.bpspt_d[i] + idx_v.bpspt_d[i];
             if (td - 2 <= d) {
                 td +=
-                    (idx_r.bpspt_s0[i] & idx_v.bpspt_s0[i]) ? -2 :
+                    (idx_r.bpspt_s1[i] & idx_v.bpspt_s1[i]) ? -2 :
                     ((idx_r.bpspt_s0[i] & idx_v.bpspt_s1[i]) |
                     (idx_r.bpspt_s1[i] & idx_v.bpspt_s0[i]))
                     ? -1 : 0;
@@ -230,61 +245,35 @@ ConstructIndex(const graph& G) {
     parlay::internal::timer t("Indexing");
     vertex n =G.size();
     index_=parlay::sequence<index_t>(n,index_t(kBitParallelRounds));
-    // parlay::sequence<std::pair<float, vertex>> deg(n);
+    auto sizes = parlay::tabulate(n, [&](vertex j){return std::make_pair(G[j].size(), j);});
+    sizes = parlay::sort(sizes, [&] (auto a, auto b) {return a.first > b.first;});
+    // std::vector<std::pair<float, vertex> > deg(n);
     // for (vertex v = 0; v < n; ++v) {
-    // // We add a random value here to diffuse nearby vertices
-    //     deg[v] = std::make_pair(G[v].size() + float(rand()) / RAND_MAX, v);
+    //   // We add a random value here to diffuse nearby vertices
+    //   deg[v] = std::make_pair(G[v].size() + float(rand()) / RAND_MAX, v);
     // }
-    // auto sorted_deg = parlay::sort(deg);
-    // parlay::sequence<vertex> ranks(n);
-    // orders = parlay::sequence<vertex>(n);
-    // parlay::parallel_for(0,  n, [&](vertex i){
-    //     orders[i] = sorted_deg[i].second;
-    //     ranks[sorted_deg[i].second]=i;
-    // });
-    // auto newG =  parlay::tabulate(n, [&] (vertex i) {
-        // return parlay::map(G[orders[i]], [&](vertex j){return ranks[j];});});
-    std::vector<std::pair<float, vertex> > deg(n);
-    for (vertex v = 0; v < n; ++v) {
-      // We add a random value here to diffuse nearby vertices
-      deg[v] = std::make_pair(G[v].size() + float(rand()) / RAND_MAX, v);
-    }
-    std::sort(deg.rbegin(), deg.rend());
+    // std::sort(deg.rbegin(), deg.rend());
+
     orders= parlay::sequence<vertex>(n);
     parlay::sequence<vertex> inv_orders(n);
     for (vertex i = 0; i < n; ++i) {
-      orders[i] = deg[i].second;
-      inv_orders[deg[i].second]=i;
+      orders[i] = sizes[i].second;
+      inv_orders[sizes[i].second]=i;
     }
 
     auto newG =  parlay::tabulate(n, [&] (vertex i) {
       return parlay::map(G[orders[i]], [&](vertex j){return inv_orders[j];});});  
 
-    usd = parlay::tabulate(n, [](vertex i){return false;});
     t.next("loading");
-    BitPar_BFS(newG);
-    // printf("BFS source %d\n", orders[0]);
-    // auto result = BFS<vertex>(orders[0], G, G);
-    // for (vertex i = 0; i<result.size(); i++){
-    //   printf("round %u, frontier %u\n", i+1, result[i].size());
-    // }
-    // static const uint8_t INF8 = 100;
-    // auto distances = parlay::tabulate(G.size(), [&](vertex i){return INF8;});
-    // parlay::parallel_for(0, result.size(), [&](distance dist){
-    //   parlay::parallel_for(0, result[dist].size(), [&](vertex j){
-    //     distances[result[dist][j]]=dist;
-    //   });
-    // });
-    // printf("check distances with single source BFS\n");
-    // for (int i = 0; i<n; i++){
-    //   if (distances[i]!= index_[orders[i]].bpspt_d[0]){
-    //     printf("check fail at %dth v,distance %d bpspt_d %d\n", i,distances[i], index_[orders[i]].bpspt_d[0]);
-    //     break;
-    //   }
-    // }
-
-    t.next("BitParallel BFS");
-    Pruned_labeling(newG);
-    t.next("Pruned Labeling");
+    for (int round = 0; round<5; round++){
+      usd = parlay::tabulate(n, [](vertex i){return false;});
+      BitPar_BFS(newG);
+      t.next("BitParallel BFS");
+    }
+    for (int i = 0; i<30; i++){
+      std::cout << std::hex << ((index_[i].bpspt_s0[0]<<1)|1) << ", " << ((index_[i].bpspt_s1[0]<<1)) << ", " << ((unsigned int) index_[i].bpspt_d[0]) << std::endl;
+    }
+    // Pruned_labeling(newG);
+    // t.next("Pruned Labeling");
     return true;
 }

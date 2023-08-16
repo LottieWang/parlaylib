@@ -26,24 +26,9 @@ struct graph_utils {
   using sparse_matrix = parlay::sequence<row>;
 
   static graph transpose(const graph& G) {
-    auto pairs = flatten(parlay::delayed::tabulate(G.size(), [&] (vertex i) {
+    auto pairs = flatten(parlay::tabulate(G.size(), [&] (vertex i) {
       return map(G[i], [=] (auto ngh) {
         return std::pair(ngh, i);}, 1000);}));
-    auto pairs_ = flatten(parlay::tabulate(G.size(), [&] (vertex i) {
-      return map(G[i], [=] (auto ngh) {
-        return std::pair(ngh,i);}, 1000);}));
-    bool equal=true;
-    parlay::parallel_for(0, pairs_.size(), [&](size_t i){
-      if (std::get<0>(pairs_[i]) != std::get<0>(pairs[i]) || 
-        std::get<1>(pairs_[i]) != std::get<1>(pairs[i])){
-          equal=false;
-        }
-    });
-    if (equal){
-      printf("equal\n");
-    }else{
-      printf("noq equal\n");
-    }
     return group_by_index(pairs, G.size());
   }
 
