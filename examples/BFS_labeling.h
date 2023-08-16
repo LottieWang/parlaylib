@@ -72,7 +72,7 @@ BitPar_BFS(const graph &G){
         usd[r] = true;
         parlay::sequence<node_info> nodes(n);
         nodes[r].d=(uint8_t)0;
-        nodes[r].visited=1;
+        nodes[r].visited=1ul;
         printf("source: %d ", orders[r]);
         parlay::sequence<vertex> vertices(64);
         int ns = 0;
@@ -99,8 +99,7 @@ BitPar_BFS(const graph &G){
               distance old_d = nodes[v].d.load();
               return (old_d!=round) && 
                 nodes[v].d.compare_exchange_strong(old_d, round);
-            }
-            return false;
+            }else{return false;}
         };
         auto cond_f = [&] (vertex v) {return !(nodes[v].visited.load()&1);};
         auto frontier_map = ligra::edge_map(G, G, edge_f, cond_f);
@@ -108,12 +107,12 @@ BitPar_BFS(const graph &G){
         auto frontier = ligra::vertex_subset<vertex>();
         frontier.add_vertices(vertices);
         while (frontier.size() > 0) {
-            printf("round %d frontier %d\n", round, frontier.size());
+            // printf("round %d frontier %d\n", round, frontier.size());
             round++;
             frontier = frontier_map(frontier);
             frontier.apply([&](vertex v){
               if ((nodes[v].visited_pre.load() & 1)==1){
-                uint64_t tmp = nodes[v].visited_pre.load();
+                uint64_t tmp = nodes[v].visited.load();
                 nodes[v].visited= nodes[v].visited_pre.load();
                 nodes[v].visited_pre=tmp;
               }else{
@@ -126,7 +125,7 @@ BitPar_BFS(const graph &G){
         parlay::parallel_for(0, n, [&](vertex v) {
             index_[orders[v]].bpspt_d[i_bpspt] = nodes[v].d.load();
             index_[orders[v]].bpspt_s1[i_bpspt] = nodes[v].visited_pre.load();
-            index_[orders[v]].bpspt_s0[i_bpspt] = nodes[v].visited.load() &~nodes[v].visited.load();
+            index_[orders[v]].bpspt_s0[i_bpspt] = nodes[v].visited.load() &~nodes[v].visited_pre.load();
         });
         t.next("write back");
     }
@@ -267,7 +266,7 @@ ConstructIndex(const graph& G) {
       t.next("BitParallel BFS");
     }
     for (int i = 0; i<30; i++){
-      std::cout << std::hex << ((index_[i].bpspt_s0[0]<<1)|1) << ", " << ((index_[i].bpspt_s1[0]<<1)) << ", " << ((unsigned int) index_[i].bpspt_d[0]) << std::endl;
+      std::cout << std::hex << index_[i].bpspt_s0[0] << ", " << index_[i].bpspt_s1[0] << ", " << ((unsigned int) index_[i].bpspt_d[0]) << std::endl;
     }
     // Pruned_labeling(newG);
     // t.next("Pruned Labeling");
