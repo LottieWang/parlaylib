@@ -18,10 +18,10 @@ using nested_seq = parlay::sequence<parlay::sequence<vertex>>;
 using graph = nested_seq;
 
 struct node_info {                 // On return
-  std::atomic<ulong> s0;      // S_r^0 (from Akiba, Iwata, Yoshina paper)
-  std::atomic<ulong> s1; // S_r^{-1}
+  std::atomic<ulong> visited;      // S_r^0 (from Akiba, Iwata, Yoshina paper)
+  std::atomic<ulong> visited_pre; // S_r^{-1}
   std::atomic<distance> d;             // P
-  node_info() : s0(0), s1(0), d((distance)100) {}
+  node_info() : visited(0), visited_pre(0), d((distance)100) {}
 };
 
 template<int kBitParallelRounds = 64>
@@ -62,7 +62,6 @@ template<int kBitParallelRounds>
 void PrunedLandmarkLabeling<kBitParallelRounds>::
 BitPar_BFS(const graph &G){
     vertex n = G.size();
-
     vertex r = 0;
     for (int i_bpspt = 0; i_bpspt < kBitParallelRounds; ++i_bpspt) {
         while (r < n && usd[r]) ++r;
@@ -73,66 +72,63 @@ BitPar_BFS(const graph &G){
         usd[r] = true;
         parlay::sequence<node_info> nodes(n);
         nodes[r].d=(uint8_t)0;
+        nodes[r].visited=1;
         printf("source: %d ", orders[r]);
-        
+        parlay::sequence<vertex> vertices(64);
         int ns = 0;
+        vertices[ns]=r;
         auto ngb = parlay::sort(G[r]);
         for (size_t i = 0; i < G[r].size(); ++i) {
             vertex v = ngb[i];
             if (!usd[v]) {
+                ns++;
                 usd[v] = true;
                 printf("%d ", orders[v]);
-                nodes[v].s1 =1ul << ns;
-                if (++ns == 64) break;
+                nodes[v].visited =1ul << ns;
+                vertices[ns]=v;
+                if (ns == 63) break;
             }
         }
         printf("\n");
-        distance d=0;
-        auto edge_f0 = [&](vertex u, vertex v) -> bool {
-            uint64_t tmp_u = nodes[u].s1.load();
-            // uint64_t tmp_v = nodes[v].s1.load();
-            // nodes[u].s0.fetch_or(tmp_v);
-            uint64_t tmp_v = nodes[v].s0.load();
-            if ((tmp_v|tmp_u) != tmp_v)
-              nodes[v].s0.fetch_or(tmp_u);
+        distance round=0;
+        auto edge_f = [&] (vertex u, vertex v) -> bool {
+            uint64_t visit_u = nodes[u].visited.load();
+            uint64_t visit_v = nodes[v].visited_pre.load();
+            if ((visit_u | visit_v) != visit_v){
+              nodes[v].visited_pre.fetch_or(visit_u);
+              distance old_d = nodes[v].d.load();
+              return (old_d!=round) && 
+                nodes[v].d.compare_exchange_strong(old_d, round);
+            }
             return false;
         };
-        auto cond_f0 = [&] (vertex v) {return nodes[v].d.load()==d;};
-        auto frontier_map0 = ligra::edge_map(G, G, edge_f0, cond_f0);
-
-        auto edge_f = [&] (vertex u, vertex v) -> bool {
-            // tmp_s[v].first  |= tmp_s[u].first;
-            // tmp_s[v].second |= tmp_s[u].second;
-            uint64_t tmp_u0 = nodes[u].s0.load();
-            uint64_t tmp_v0 = nodes[v].s0.load();
-            if ((tmp_u0 | tmp_v0) != tmp_v0){
-              nodes[v].s0.fetch_or(tmp_u0);
-            }
-            uint64_t tmp_u1 = nodes[u].s1.load();
-            uint64_t tmp_v1 = nodes[v].s1.load();
-            if ((tmp_u1|tmp_v1) != tmp_v1){
-              nodes[v].s1.fetch_or(tmp_u1);
-            }
-            if (nodes[v].d.load()<INF8) return false;
-            distance expected = INF8;
-            return nodes[v].d.compare_exchange_strong(expected, d);};
-        auto cond_f = [&] (vertex v) {return nodes[v].d.load()>=d;};
+        auto cond_f = [&] (vertex v) {return !(nodes[v].visited.load()&1);};
         auto frontier_map = ligra::edge_map(G, G, edge_f, cond_f);
-        
-
-        auto frontier = ligra::vertex_subset(r);
-        // nested_seq frontiers;
+        // auto frontier = ligra::vertex_subset(vertices);
+        auto frontier = ligra::vertex_subset<vertex>();
+        frontier.add_vertices(vertices);
         while (frontier.size() > 0) {
-            // printf("round %d frontier %d\n", d, frontier.size());
-            d++;
+            printf("round %d frontier %d\n", round, frontier.size());
+            round++;
             frontier = frontier_map(frontier);
-            frontier_map0(frontier);
+            frontier.apply([&](vertex v){
+              if ((nodes[v].visited_pre.load() & 1)==1){
+                uint64_t tmp = nodes[v].visited_pre.load();
+                nodes[v].visited= nodes[v].visited_pre.load();
+                nodes[v].visited_pre=tmp;
+              }else{
+                nodes[v].visited = nodes[v].visited_pre.load();
+              }
+            });
         }
-        for (vertex v = 0; v < n; ++v) {
+        parlay::internal::timer t("inner ");
+        t.start();
+        parlay::parallel_for(0, n, [&](vertex v) {
             index_[orders[v]].bpspt_d[i_bpspt] = nodes[v].d.load();
-            index_[orders[v]].bpspt_s1[i_bpspt] = nodes[v].s1.load();
-            index_[orders[v]].bpspt_s0[i_bpspt] = nodes[v].s0.load() &~nodes[v].s1.load();
-        }
+            index_[orders[v]].bpspt_s1[i_bpspt] = nodes[v].visited_pre.load();
+            index_[orders[v]].bpspt_s0[i_bpspt] = nodes[v].visited.load() &~nodes[v].visited.load();
+        });
+        t.next("write back");
     }
 }
 /**/
@@ -265,7 +261,7 @@ ConstructIndex(const graph& G) {
       return parlay::map(G[orders[i]], [&](vertex j){return inv_orders[j];});});  
 
     t.next("loading");
-    for (int round = 0; round<5; round++){
+    for (int repeat = 0; repeat<5; repeat++){
       usd = parlay::tabulate(n, [](vertex i){return false;});
       BitPar_BFS(newG);
       t.next("BitParallel BFS");
