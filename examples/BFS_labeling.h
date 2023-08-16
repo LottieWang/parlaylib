@@ -29,14 +29,13 @@ class PrunedLandmarkLabeling {
   private:
     static const distance INF8;  // For unreachable pairs
     struct index_t {
-        parlay::sequence<distance> bpspt_d;
-        parlay::sequence<uint64_t> bpspt_s0;
-        parlay::sequence<uint64_t> bpspt_s1;
+        distance bpspt_d[kBitParallelRounds];
+        uint64_t bpspt_s0[kBitParallelRounds];
+        uint64_t bpspt_s1[kBitParallelRounds];
         parlay::sequence<vertex> spt_v;
         parlay::sequence<distance> spt_d;
 
-        index_t(size_t size) : bpspt_d(size), 
-            bpspt_s0(size), bpspt_s1(size) {}
+        // index_t() : {}
     }; 
     //   __attribute__((aligned(64)));  // Aligned for cache lines
     void BitPar_BFS(const graph &G);
@@ -142,15 +141,15 @@ void PrunedLandmarkLabeling<kBitParallelRounds>::
 Pruned_labeling(const graph &G){
   parlay::internal::timer t("pruned_labeling", true);
   vertex n = G.size();
-  // parlay::sequence<std::pair<std::vector<vertex>, std::vector<distance> > >
-  //       tmp_idx(n, std::make_pair(std::vector<vertex>(1, n),
-  //                            std::vector<distance>(1, INF8)));
   parlay::sequence<std::pair<std::vector<vertex>, std::vector<distance> > >
-  tmp_idx(n);
+        tmp_idx(n, std::make_pair(std::vector<vertex>(1, n),
+                             std::vector<distance>(1, INF8)));
+  // parlay::sequence<std::pair<std::vector<vertex>, std::vector<distance> > >
+  // tmp_idx(n);
   t.next("tmp_idx");
   parlay::sequence<bool> vis(n);  
   parlay::sequence<vertex> que(n);
-  parlay::sequence<distance> dst_r(n+1, INF8); 
+  // parlay::sequence<distance> dst_r(n+1, INF8); 
   long int total_size = 0; 
   vertex que_t0=0, que_t1=0, que_h=0;
   t.next("other initialization");
@@ -158,9 +157,9 @@ Pruned_labeling(const graph &G){
     if (usd[r]) continue;
     index_t &idx_r = index_[orders[r]];
     std::pair<std::vector<vertex>, std::vector<distance>> & tmp_idx_r = tmp_idx[r];
-    for (size_t i = 0; i<tmp_idx[r].first.size(); i++){
-      dst_r[tmp_idx_r.first[i]]=tmp_idx_r.second[i];
-    }
+    // for (size_t i = 0; i<tmp_idx[r].first.size(); i++){
+    //   dst_r[tmp_idx_r.first[i]]=tmp_idx_r.second[i];
+    // }
     int que_t0=0, que_t1=0, que_h=0;
     que[que_h++]=r;
     vis[r]=true;
@@ -170,7 +169,6 @@ Pruned_labeling(const graph &G){
       for (vertex que_i = que_t0; que_i <que_t1; que_i++){
         vertex v = que[que_i];
         if (usd[v]) continue;
-        // std::pair<std::vector<vertex>, std::vector<distance>> & tmp_idx_v = tmp_idx[v];
         index_t & idx_v = index_[orders[v]];
 
         // Prefetch
@@ -189,22 +187,32 @@ Pruned_labeling(const graph &G){
                 if (td <= d) goto pruned;
             }
         }
-
-        for (size_t i = 0; i<tmp_idx[v].first.size(); ++i){
-          vertex w = tmp_idx[v].first[i];
-          distance td= tmp_idx[v].second[i]+dst_r[w];
-          if (td<=d){ goto pruned;}
+        // t.next("Bit Prune");
+        for (int i1 = 0, i2 = 0; ; ) {
+          int v1 = tmp_idx_r.first[i1], v2 = tmp_idx[v].first[i2];
+          if (v1==n || v2==n) {break;}
+          if (v1 == v2) {
+            // if (v1==n) break;
+            int td = tmp_idx_r.second[i1] + tmp_idx[v].second[i2];
+            if (td <= d){ goto pruned;}
+            i1++;
+            i2++;
+          } else {
+            i1 += v1 < v2 ? 1 : 0;
+            i2 += v1 > v2 ? 1 : 0;
+          }
         }
+        // t.next("Label Prune");
 
         // Traverse
         label_size++;
-        // tmp_idx[v].first.back() = r;
-        // tmp_idx[v].second.back()=d;
-        // tmp_idx[v].first.push_back(n);
-        // tmp_idx[v].second.push_back(INF8);
+        tmp_idx[v].first.back() = r;
+        tmp_idx[v].second.back()=d;
+        tmp_idx[v].first.push_back(n);
+        tmp_idx[v].second.push_back(INF8);
 
-        tmp_idx[v].first.push_back(r);
-        tmp_idx[v].second.push_back(d);
+        // tmp_idx[v].first.push_back(r);
+        // tmp_idx[v].second.push_back(d);
         for (size_t i = 0; i<G[v].size(); i++){
           vertex w = G[v][i];
           if (!vis[w]){
@@ -219,9 +227,9 @@ Pruned_labeling(const graph &G){
       que_t1 = que_h;
     }
     for (vertex i = 0; i<que_h; i++) vis[que[i]]=false;
-    for (size_t i = 0; i<tmp_idx[r].first.size(); ++i){
-        dst_r[tmp_idx[r].first[i]]=INF8;
-    }
+    // for (size_t i = 0; i<tmp_idx[r].first.size(); ++i){
+    //     dst_r[tmp_idx[r].first[i]]=INF8;
+    // }
     usd[r]=true;
     // #ifdef DEBUG
     // printf("vertex %d add labels %d\n", r, label_size);
@@ -237,7 +245,7 @@ Pruned_labeling(const graph &G){
     // tmp_idx[v].first.clear();
     // tmp_idx[v].second.clear();
   }
-  long total = reduce(map(tmp_idx, [&](auto p){return p.first.size();}));
+  long total = reduce(map(tmp_idx, [&](auto p){return p.first.size()-1;}));
   printf("average normal label size %f\n", (double)total/(double)n);
   printf("total explored nodes: %ld\n", total_size);
 }
@@ -248,7 +256,7 @@ bool PrunedLandmarkLabeling<kBitParallelRounds>::
 ConstructIndex(const graph& G) {
     parlay::internal::timer t("Indexing", true);
     vertex n =G.size();
-    index_=parlay::sequence<index_t>(n,index_t(kBitParallelRounds));
+    index_=parlay::sequence<index_t>(n);
     t.next("index");
     auto sizes = parlay::tabulate(n, [&](vertex j){return std::make_pair(G[j].size(), j);});
     sizes = parlay::sort(sizes, [&] (auto a, auto b) {return a.first > b.first;});
