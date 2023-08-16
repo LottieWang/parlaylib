@@ -61,9 +61,11 @@ const distance PrunedLandmarkLabeling<kBitParallelRounds>::INF8 = 100;
 template<int kBitParallelRounds>
 void PrunedLandmarkLabeling<kBitParallelRounds>::
 BitPar_BFS(const graph &G){
+    parlay::internal::timer t("BFS", true);
     vertex n = G.size();
     vertex r = 0;
     for (int i_bpspt = 0; i_bpspt < kBitParallelRounds; ++i_bpspt) {
+        
         while (r < n && usd[r]) ++r;
         if (r == n) {
             for (int v = 0; v < n; ++v) index_[v].bpspt_d[i_bpspt] = INF8;
@@ -73,7 +75,7 @@ BitPar_BFS(const graph &G){
         parlay::sequence<node_info> nodes(n);
         nodes[r].d=(uint8_t)0;
         nodes[r].visited=1ul;
-        printf("source: %d ", orders[r]);
+        // printf("source: %d ", orders[r]);
         parlay::sequence<vertex> vertices(64);
         int ns = 0;
         vertices[ns]=r;
@@ -83,13 +85,15 @@ BitPar_BFS(const graph &G){
             if (!usd[v]) {
                 ns++;
                 usd[v] = true;
-                printf("%d ", orders[v]);
+                // printf("%d ", orders[v]);
                 nodes[v].visited =1ul << ns;
                 vertices[ns]=v;
                 if (ns == 63) break;
             }
         }
-        printf("\n");
+        t.next("ngb & init");
+        // printf("\n");
+        // t_load.next("preparing");
         distance round=0;
         auto edge_f = [&] (vertex u, vertex v) -> bool {
             uint64_t visit_u = nodes[u].visited.load();
@@ -97,19 +101,20 @@ BitPar_BFS(const graph &G){
             if ((visit_u | visit_v) != visit_v){
               nodes[v].visited_pre.fetch_or(visit_u);
               distance old_d = nodes[v].d.load();
-              return (old_d!=round) && 
-                nodes[v].d.compare_exchange_strong(old_d, round);
-            }else{return false;}
-        };
+              return ((old_d!=round) && 
+                nodes[v].d.compare_exchange_strong(old_d, round));
+            }else return false;};
         auto cond_f = [&] (vertex v) {return !(nodes[v].visited.load()&1);};
         auto frontier_map = ligra::edge_map(G, G, edge_f, cond_f);
         // auto frontier = ligra::vertex_subset(vertices);
         auto frontier = ligra::vertex_subset<vertex>();
         frontier.add_vertices(vertices);
+        t.next("head");
         while (frontier.size() > 0) {
             // printf("round %d frontier %d\n", round, frontier.size());
             round++;
-            frontier = frontier_map(frontier);
+            frontier = frontier_map(frontier,false);
+            t.next("map");
             frontier.apply([&](vertex v){
               if ((nodes[v].visited_pre.load() & 1)==1){
                 uint64_t tmp = nodes[v].visited.load();
@@ -119,9 +124,10 @@ BitPar_BFS(const graph &G){
                 nodes[v].visited = nodes[v].visited_pre.load();
               }
             });
+            t.next("update");
         }
-        parlay::internal::timer t("inner ");
-        t.start();
+        // parlay::internal::timer t("inner ");
+        // t.start();
         parlay::parallel_for(0, n, [&](vertex v) {
             index_[orders[v]].bpspt_d[i_bpspt] = nodes[v].d.load();
             index_[orders[v]].bpspt_s1[i_bpspt] = nodes[v].visited_pre.load();
@@ -262,6 +268,7 @@ ConstructIndex(const graph& G) {
     t.next("loading");
     for (int repeat = 0; repeat<5; repeat++){
       usd = parlay::tabulate(n, [](vertex i){return false;});
+      t.next("init usd");
       BitPar_BFS(newG);
       t.next("BitParallel BFS");
     }
