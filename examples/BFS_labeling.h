@@ -61,7 +61,7 @@ const distance PrunedLandmarkLabeling<kBitParallelRounds>::INF8 = 100;
 template<int kBitParallelRounds>
 void PrunedLandmarkLabeling<kBitParallelRounds>::
 BitPar_BFS(const graph &G){
-    parlay::internal::timer t("BFS", true);
+    parlay::internal::timer t("BFS", false);
     vertex n = G.size();
     vertex r = 0;
     for (int i_bpspt = 0; i_bpspt < kBitParallelRounds; ++i_bpspt) {
@@ -140,17 +140,20 @@ BitPar_BFS(const graph &G){
 template<int kBitParallelRounds>
 void PrunedLandmarkLabeling<kBitParallelRounds>::
 Pruned_labeling(const graph &G){
+  parlay::internal::timer t("pruned_labeling", true);
   vertex n = G.size();
   // parlay::sequence<std::pair<std::vector<vertex>, std::vector<distance> > >
   //       tmp_idx(n, std::make_pair(std::vector<vertex>(1, n),
   //                            std::vector<distance>(1, INF8)));
   parlay::sequence<std::pair<std::vector<vertex>, std::vector<distance> > >
-        tmp_idx(n);
+  tmp_idx(n);
+  t.next("tmp_idx");
   parlay::sequence<bool> vis(n);  
   parlay::sequence<vertex> que(n);
   parlay::sequence<distance> dst_r(n+1, INF8); 
   long int total_size = 0; 
   vertex que_t0=0, que_t1=0, que_h=0;
+  t.next("other initialization");
   for (vertex r = 0; r<n; r++){
     if (usd[r]) continue;
     index_t &idx_r = index_[orders[r]];
@@ -243,9 +246,10 @@ Pruned_labeling(const graph &G){
 template<int kBitParallelRounds>
 bool PrunedLandmarkLabeling<kBitParallelRounds>::
 ConstructIndex(const graph& G) {
-    parlay::internal::timer t("Indexing");
+    parlay::internal::timer t("Indexing", true);
     vertex n =G.size();
     index_=parlay::sequence<index_t>(n,index_t(kBitParallelRounds));
+    t.next("index");
     auto sizes = parlay::tabulate(n, [&](vertex j){return std::make_pair(G[j].size(), j);});
     sizes = parlay::sort(sizes, [&] (auto a, auto b) {return a.first > b.first;});
     // std::vector<std::pair<float, vertex> > deg(n);
@@ -266,16 +270,19 @@ ConstructIndex(const graph& G) {
       return parlay::map(G[orders[i]], [&](vertex j){return inv_orders[j];});});  
 
     t.next("loading");
-    for (int repeat = 0; repeat<5; repeat++){
-      usd = parlay::tabulate(n, [](vertex i){return false;});
-      t.next("init usd");
-      BitPar_BFS(newG);
-      t.next("BitParallel BFS");
-    }
-    for (int i = 0; i<30; i++){
-      std::cout << std::hex << index_[i].bpspt_s0[0] << ", " << index_[i].bpspt_s1[0] << ", " << ((unsigned int) index_[i].bpspt_d[0]) << std::endl;
-    }
-    // Pruned_labeling(newG);
-    // t.next("Pruned Labeling");
+    usd = parlay::tabulate(n, [](vertex i){return false;});
+    BitPar_BFS(newG);
+    t.next("BitParallel BFS");
+    // for (int repeat = 0; repeat<5; repeat++){
+    //   usd = parlay::tabulate(n, [](vertex i){return false;});
+    //   t.next("init usd");
+    //   BitPar_BFS(newG);
+    //   t.next("BitParallel BFS");
+    // }
+    // for (int i = 0; i<30; i++){
+    //   std::cout << std::hex << index_[i].bpspt_s0[0] << ", " << index_[i].bpspt_s1[0] << ", " << ((unsigned int) index_[i].bpspt_d[0]) << std::endl;
+    // }
+    Pruned_labeling(newG);
+    t.next("Pruned Labeling");
     return true;
 }
