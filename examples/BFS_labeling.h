@@ -128,11 +128,13 @@ BitPar_BFS(const graph &G){
             frontier = frontier_map(frontier);
             frontier_map0(frontier);
         }
-        for (vertex v = 0; v < n; ++v) {
+        parlay::internal::timer t("inner");
+        parlay::parallel_for (0, n, [&](vertex v) {
             index_[orders[v]].bpspt_d[i_bpspt] = nodes[v].d.load();
             index_[orders[v]].bpspt_s1[i_bpspt] = nodes[v].s1.load();
             index_[orders[v]].bpspt_s0[i_bpspt] = nodes[v].s0.load() &~nodes[v].s1.load();
-        }
+        });
+        t.next("copy back");
     }
 }
 /**/
