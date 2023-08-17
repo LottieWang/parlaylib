@@ -11,7 +11,7 @@ graphs = ["Epinions1", "Slashdot", "DBLP"]
 
 
 if __name__=="__main__":
-    numKbitParallel=1024
+    numKbitParallel=0
     out_file = f"{CURRENT_DIR}/../log/stats_{numKbitParallel}.out"
     for g in graphs:
         in_file = f"{GRAPH_DIR}/{g}_sym.bin"

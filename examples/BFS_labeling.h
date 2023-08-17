@@ -146,36 +146,48 @@ Pruned_labeling(const graph &G){
                              std::vector<distance>(1, INF8)));
   // parlay::sequence<std::pair<std::vector<vertex>, std::vector<distance> > >
   // tmp_idx(n);
-  t.next("tmp_idx");
+  t.next("tmp_idx init");
   parlay::sequence<bool> vis(n);  
   parlay::sequence<vertex> que(n);
-  // parlay::sequence<distance> dst_r(n+1, INF8); 
+  parlay::sequence<distance> dst_r(n+1, INF8); 
   long int total_size = 0; 
   vertex que_t0=0, que_t1=0, que_h=0;
+  parlay::internal::timer t_prune2("  prune2", true);
+  parlay::internal::timer t_prune1("  prune1", true);
+  parlay::internal::timer t_init_out("  outer inner",false);
+  parlay::internal::timer t_init("  init inner",false);
+  parlay::internal::timer t_insert("  insert label",false);
+  parlay::internal::timer t_traverse("  traverse", false);
+  parlay::internal::timer t_clean("  clean", false);
   t.next("other initialization");
   for (vertex r = 0; r<n; r++){
-    if (usd[r]) continue;
+    if (usd[r]) {continue;}
+    t_init_out.start();
     index_t &idx_r = index_[orders[r]];
     std::pair<std::vector<vertex>, std::vector<distance>> & tmp_idx_r = tmp_idx[r];
-    // for (size_t i = 0; i<tmp_idx[r].first.size(); i++){
-    //   dst_r[tmp_idx_r.first[i]]=tmp_idx_r.second[i];
-    // }
+    for (size_t i = 0; i<tmp_idx[r].first.size(); i++){
+      dst_r[tmp_idx_r.first[i]]=tmp_idx_r.second[i];
+    }
     int que_t0=0, que_t1=0, que_h=0;
     que[que_h++]=r;
     vis[r]=true;
     que_t1=que_h;
     long int label_size = 0;
+    t_init_out.stop();
+
     for (distance d = 0; que_t0<que_h; d++){
       for (vertex que_i = que_t0; que_i <que_t1; que_i++){
+        t_init.start();
         vertex v = que[que_i];
-        if (usd[v]) continue;
+        if (usd[v]) {t_init.stop(); continue;}
+        // bool pruned=false;
         index_t & idx_v = index_[orders[v]];
-
+        t_init.stop();
         // Prefetch
         // _mm_prefetch(&idx_v[0], _MM_HINT_T0);
         // _mm_prefetch(&tmp_idx_v.first[0], _MM_HINT_T0);
         // _mm_prefetch(&tmp_idx_v.second[0], _MM_HINT_T0);
-
+        t_prune1.start();
         for (int i = 0; i < kBitParallelRounds; ++i) {
             int td = idx_r.bpspt_d[i] + idx_v.bpspt_d[i];
             if (td - 2 <= d) {
@@ -184,35 +196,47 @@ Pruned_labeling(const graph &G){
                     ((idx_r.bpspt_s0[i] & idx_v.bpspt_s1[i]) |
                     (idx_r.bpspt_s1[i] & idx_v.bpspt_s0[i]))
                     ? -1 : 0;
-                if (td <= d) goto pruned;
+                if (td <= d) {t_prune1.stop(); goto pruned;}
             }
         }
+        t_prune1.stop();
+        t_prune2.start();
+        // if (pruned) {t_prune2.stop(); continue;}
         // t.next("Bit Prune");
-        for (int i1 = 0, i2 = 0; ; ) {
-          int v1 = tmp_idx_r.first[i1], v2 = tmp_idx[v].first[i2];
-          if (v1==n || v2==n) {break;}
-          if (v1 == v2) {
-            // if (v1==n) break;
-            int td = tmp_idx_r.second[i1] + tmp_idx[v].second[i2];
-            if (td <= d){ goto pruned;}
-            i1++;
-            i2++;
-          } else {
-            i1 += v1 < v2 ? 1 : 0;
-            i2 += v1 > v2 ? 1 : 0;
-          }
+        // for (int i1 = 0, i2 = 0; ; ) {
+        //   int v1 = tmp_idx_r.first[i1], v2 = tmp_idx[v].first[i2];
+        //   // if (v1==n || v2==n) {break;}
+        //   if (v1 == v2) {
+        //     if (v1==n) break;
+        //     int td = tmp_idx_r.second[i1] + tmp_idx[v].second[i2];
+        //     if (td <= d){ pruned=true; break;}
+        //     i1++;
+        //     i2++;
+        //   } else {
+        //     i1 += v1 < v2 ? 1 : 0;
+        //     i2 += v1 > v2 ? 1 : 0;
+        //   }
+        // }
+        for (int i = 0; i<tmp_idx[v].first.size(); i++){
+          vertex u = tmp_idx[v].first[i];
+          distance td = dst_r[u]+tmp_idx[v].second[i];
+          if (td<=d){t_prune2.stop(); goto pruned;}
         }
+        t_prune2.stop();
         // t.next("Label Prune");
-
+        t_insert.start();
+        // if (pruned) {t_insert.stop(); continue;}
         // Traverse
         label_size++;
         tmp_idx[v].first.back() = r;
         tmp_idx[v].second.back()=d;
         tmp_idx[v].first.push_back(n);
         tmp_idx[v].second.push_back(INF8);
+        t_insert.stop();
 
         // tmp_idx[v].first.push_back(r);
         // tmp_idx[v].second.push_back(d);
+        t_traverse.start();
         for (size_t i = 0; i<G[v].size(); i++){
           vertex w = G[v][i];
           if (!vis[w]){
@@ -220,22 +244,37 @@ Pruned_labeling(const graph &G){
             vis[w]=true;
           }
         }
+        t_traverse.stop();
       pruned:
         {}
       }
+      t_traverse.start();
       que_t0 = que_t1;
       que_t1 = que_h;
+      t_traverse.stop();
     }
+    t_clean.start();
     for (vertex i = 0; i<que_h; i++) vis[que[i]]=false;
-    // for (size_t i = 0; i<tmp_idx[r].first.size(); ++i){
-    //     dst_r[tmp_idx[r].first[i]]=INF8;
-    // }
+   
+    for (size_t i = 0; i<tmp_idx[r].first.size(); ++i){
+        dst_r[tmp_idx[r].first[i]]=INF8;
+    }
     usd[r]=true;
     // #ifdef DEBUG
     // printf("vertex %d add labels %d\n", r, label_size);
     // #endif
     total_size += que_h;
+    t_clean.stop();
   }
+  t_prune1.total();
+  t_prune2.total();
+  t_init_out.total();
+  t_init.total();
+  t_insert.total();
+  t_traverse.total();
+  t_clean.total();
+
+  t.next("pruned BFS");
   for (vertex v = 0; v < n; ++v) {
     size_t k = tmp_idx[v].first.size();
     index_[orders[v]].spt_v.reserve(k);
@@ -245,9 +284,11 @@ Pruned_labeling(const graph &G){
     // tmp_idx[v].first.clear();
     // tmp_idx[v].second.clear();
   }
+  t.next("write back");
   long total = reduce(map(tmp_idx, [&](auto p){return p.first.size()-1;}));
   printf("average normal label size %f\n", (double)total/(double)n);
   printf("total explored nodes: %ld\n", total_size);
+  t.next("report label size");
 }
 
 
