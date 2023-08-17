@@ -154,6 +154,9 @@ Pruned_labeling(const graph &G){
   long int total_size = 0; 
   vertex que_t0=0, que_t1=0, que_h=0;
   t.next("other initialization");
+  // parlay::internal::timer t_prune1("pruned1",false);
+  // parlay::internal::timer t_prune2("pruned2",false);
+
   for (vertex r = 0; r<n; r++){
     if (usd[r]) continue;
     index_t &idx_r = index_[orders[r]];
@@ -177,7 +180,7 @@ Pruned_labeling(const graph &G){
         // _mm_prefetch(&idx_v[0], _MM_HINT_T0);
         // _mm_prefetch(&tmp_idx_v.first[0], _MM_HINT_T0);
         // _mm_prefetch(&tmp_idx_v.second[0], _MM_HINT_T0);
-
+        // t_prune1.start();
         for (int i = 0; i < kBitParallelRounds; ++i) {
             int td = idx_r.bpspt_d[i] + idx_v.bpspt_d[i];
             if (td - 2 <= d) {
@@ -186,15 +189,21 @@ Pruned_labeling(const graph &G){
                     ((idx_r.bpspt_s0[i] & idx_v.bpspt_s1[i]) |
                     (idx_r.bpspt_s1[i] & idx_v.bpspt_s0[i]))
                     ? -1 : 0;
-                if (td <= d) goto pruned;
+                if (td <= d) {
+                  // t_prune1.stop(); 
+                  goto pruned;}
             }
         }
-
+        // t_prune1.stop();
+        // t_prune2.start();
         for (size_t i = 0; i<tmp_idx[v].first.size(); ++i){
           vertex w = tmp_idx[v].first[i];
           distance td= tmp_idx[v].second[i]+dst_r[w];
-          if (td<=d){ goto pruned;}
+          if (td<=d){ 
+            // t_prune2.stop(); 
+            goto pruned;}
         }
+        // t_prune2.stop();
 
         // Traverse
         label_size++;
@@ -228,6 +237,8 @@ Pruned_labeling(const graph &G){
     // #endif
     total_size += que_h;
   }
+  // t_prune1.total();
+  // t_prune2.total();
   for (vertex v = 0; v < n; ++v) {
     size_t k = tmp_idx[v].first.size();
     index_[orders[v]].spt_v.reserve(k);
